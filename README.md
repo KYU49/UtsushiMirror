@@ -28,7 +28,7 @@ VRM のキャラクターをデスクトップに表示して、Web カメラだ
 
 | 使う機能 | 必要なもの |
 |---|---|
-| Web カメラのトラッキング | [Python 3.11](https://www.python.org/downloads/) (3.9 〜 3.12 でも動く見込み。下の「トラッキングの準備」を参照) |
+| Web カメラのトラッキング | [uv](https://docs.astral.sh/uv/) (Python 3.11 の環境を自動で用意します。下の「トラッキングの準備」を参照) |
 | 動画の録画 | [FFmpeg](https://ffmpeg.org/download.html) (`ffmpeg.exe` に PATH が通っていること) |
 | OBS への Spout2 出力 | [OBS Studio](https://obsproject.com/) と [obs-spout2-plugin](https://github.com/Off-World-Live/obs-spout2-plugin) |
 | 仮想カメラ (Discord / Zoom) | [OBS Studio](https://obsproject.com/) (仮想カメラのドライバを借ります) と管理者権限 |
@@ -91,21 +91,27 @@ VRM のキャラクターをデスクトップに表示して、Web カメラだ
 
 ## トラッキングの準備 (初回だけ)
 
-Web カメラのトラッキングは、同梱の Python プログラム (`tracker/`) で行います。初めて使う前に、次の準備が必要です。
+Web カメラのトラッキングは、同梱の Python プログラム (`tracker/`) で行います。
+初めて使う前に、[uv](https://docs.astral.sh/uv/) で `tracker\.venv` に Python の環境を作ります。Python 本体も uv が自動で用意するので、別に入れる必要はありません。
 
-1. [Python 3.11](https://www.python.org/downloads/) をインストールします (インストール時に「Add python.exe to PATH」にチェック)。
-2. PowerShell を開き、展開したフォルダの `tracker` に移動して、次を実行します (数分かかります)。
+1. uv をインストールします (入っていない場合だけ)。PowerShell で次を実行し、終わったら PowerShell を開き直します。
+
+```powershell
+winget install --id=astral-sh.uv -e
+```
+
+2. 展開したフォルダの `tracker` に移動して、次を実行します (数分かかります)。
 
 ```powershell
 cd C:\Tools\UtsushiMirror\tracker
 ```
 
 ```powershell
-py -3.11 -m venv .venv
+uv venv --python 3.11 .venv
 ```
 
 ```powershell
-.venv\Scripts\python -m pip install -r requirements.txt
+uv pip install --python .venv -r requirements.txt
 ```
 
 3. うつしみらーの設定画面の「トラッキング」ページで、カメラとモード (顔だけ / 顔と手 / 全身 / カスタム) を選んで「開始」を押します。
@@ -180,7 +186,7 @@ MCP クライアントへの登録例:
 
 ## ソースからビルドする (開発者向け)
 
-必要なもの: Windows 11、[Godot 4.7.2](https://godotengine.org/) と Windows 用のエクスポートテンプレート、Rust (stable)、Python 3.11 (トラッカー用)。
+必要なもの: Windows 11、[Godot 4.7.2](https://godotengine.org/) と Windows 用のエクスポートテンプレート、Rust (stable)、[uv](https://docs.astral.sh/uv/) (トラッカー用。準備は上の「トラッキングの準備」と同じく `tracker` で `uv venv --python 3.11 .venv` と `uv pip install --python .venv -r requirements.txt`)。
 
 ```powershell
 # ビルドして起動
