@@ -100,12 +100,14 @@ try {
     Copy-Item (Join-Path $RepoRoot "scripts\register_vcam.ps1") (Join-Path $dstScriptsDir "register_vcam.ps1") -Force
 
     # Webcam tracker (separate Python process). The venv only works on a PC that has the same base Python,
-    # so it is copied for local use; other PCs create tracker\.venv with requirements.txt (see README).
+    # so it is copied for local use; other PCs create tracker\.venv with `uv sync` (see README).
     $srcTracker = Join-Path $RepoRoot "tracker"
     $dstTracker = Join-Path $absOutDir "tracker"
     New-Item -ItemType Directory -Force -Path $dstTracker | Out-Null
     Copy-Item (Join-Path $srcTracker "vrm_tracker.py") $dstTracker -Force
-    Copy-Item (Join-Path $srcTracker "requirements.txt") $dstTracker -Force
+    foreach ($f in @("pyproject.toml", "uv.lock", ".python-version")) {
+        Copy-Item (Join-Path $srcTracker $f) $dstTracker -Force
+    }
     New-Item -ItemType Directory -Force -Path (Join-Path $dstTracker "vrmtrack") | Out-Null
     Copy-Item (Join-Path $srcTracker "vrmtrack\*.py") (Join-Path $dstTracker "vrmtrack") -Force
     if (Test-Path (Join-Path $srcTracker "models")) {

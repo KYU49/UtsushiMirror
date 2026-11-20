@@ -13,8 +13,7 @@
 
 ```powershell
 cd tracker
-py -3.11 -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
+uv sync
 ```
 
 MediaPipe のモデル (約 30MB) は初回起動時に `tracker/models/` へ自動で取得されます。
@@ -93,7 +92,7 @@ MediaPipe のモデル (約 30MB) は初回起動時に `tracker/models/` へ自
 
 ### Linux / Android での利用
 
-- **Linux**: そのまま動きます (V4L2)。`python3 -m venv` で同じ手順。
+- **Linux**: そのまま動きます (V4L2)。`uv sync` で同じ手順。
 - **Android**: 計算部分 `tracker/vrmtrack/solver.py` は numpy だけの純粋な計算で、入出力も単純な配列・辞書にしてあります。
   Android 版は MediaPipe Tasks (Kotlin) でランドマークを得て、同じ計算を移植し、VMC で送れば本体・XR のどちらもそのまま受け取れます。
   既存の VMC 対応スマホアプリ (例: iPhone/Android の顔トラッキングアプリ) からの送信も受け付けます。

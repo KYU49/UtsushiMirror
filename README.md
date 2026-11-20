@@ -92,30 +92,25 @@ VRM のキャラクターをデスクトップに表示して、Web カメラだ
 ## トラッキングの準備 (初回だけ)
 
 Web カメラのトラッキングは、同梱の Python プログラム (`tracker/`) で行います。
-初めて使う前に、[uv](https://docs.astral.sh/uv/) で `tracker\.venv` に Python の環境を作ります。Python 本体も uv が自動で用意するので、別に入れる必要はありません。
+初めて使う前に、[uv](https://docs.astral.sh/uv/) で Python の環境を作ります。Python 本体も uv が自動で用意するので、別に入れる必要はありません。
 
-1. uv をインストールします (入っていない場合だけ)。PowerShell で次を実行し、終わったら PowerShell を開き直します。
+1. uv をインストールします (入っていない場合だけ)。スタートメニューで「ターミナル」を開いて次を実行し、終わったらターミナルを閉じます。
 
 ```powershell
 winget install --id=astral-sh.uv -e
 ```
 
-2. 展開したフォルダの `tracker` に移動して、次を実行します (数分かかります)。
+2. エクスプローラーで、展開したフォルダの中の `tracker` フォルダを開きます。
+3. フォルダの中の何もないところを右クリックして、「ターミナルで開く」を選びます。
+   - Windows 10 で見当たらないときは、`Shift` を押しながら右クリックして「PowerShell ウィンドウをここで開く」を選んでください。
+4. 開いたターミナルで次を実行します (数分かかります)。
 
 ```powershell
-cd C:\Tools\UtsushiMirror\tracker
+uv sync
 ```
 
-```powershell
-uv venv --python 3.11 .venv
-```
-
-```powershell
-uv pip install --python .venv -r requirements.txt
-```
-
-3. うつしみらーの設定画面の「トラッキング」ページで、カメラとモード (顔だけ / 顔と手 / 全身 / カスタム) を選んで「開始」を押します。
-4. 正面を向いて腕を下ろした姿勢で「キャリブレーション」を押すと、今の姿勢が基準になります。
+5. うつしみらーの設定画面の「トラッキング」ページで、カメラとモード (顔だけ / 顔と手 / 全身 / カスタム) を選んで「開始」を押します。
+6. 正面を向いて腕を下ろした姿勢で「キャリブレーション」を押すと、今の姿勢が基準になります。
 
 - カメラの映像はアプリに表示しません。別ウィンドウには、検出した顔や手の線だけが表示されます。
 - 表情・視線・腕の動き方などは、同じページのスライダーで調整できます。視線は「視線を動かす / カメラ目線 / 目線固定」から選べます。
@@ -186,7 +181,7 @@ MCP クライアントへの登録例:
 
 ## ソースからビルドする (開発者向け)
 
-必要なもの: Windows 11、[Godot 4.7.2](https://godotengine.org/) と Windows 用のエクスポートテンプレート、Rust (stable)、[uv](https://docs.astral.sh/uv/) (トラッカー用。準備は上の「トラッキングの準備」と同じく `tracker` で `uv venv --python 3.11 .venv` と `uv pip install --python .venv -r requirements.txt`)。
+必要なもの: Windows 11、[Godot 4.7.2](https://godotengine.org/) と Windows 用のエクスポートテンプレート、Rust (stable)、[uv](https://docs.astral.sh/uv/) (トラッカー用。`tracker` フォルダで `uv sync`)。
 
 ```powershell
 # ビルドして起動
