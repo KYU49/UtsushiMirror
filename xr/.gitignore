@@ -1,0 +1,10 @@
+# 同期・取得されるもの (scripts/build_xr.ps1 が用意する)
+.godot/
+addons/godotopenxrvendors/
+android/
+scripts/vrm/
+scripts/core/
+shaders/
+assets/
+build/
+*.import

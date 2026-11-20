@@ -1,0 +1,31 @@
+; VRMViewer XR — Android XR 向け空間配置アプリ (Godot 4.7)
+; 共有コード (scripts/vrm, shaders, assets) は scripts/build_xr.ps1 が ../godot, ../assets から同期する。
+
+config_version=5
+
+[application]
+
+config/name="VRMViewer XR"
+run/main_scene="res://scenes/xr_main.tscn"
+config/icon="res://icon.svg"
+config/features=PackedStringArray("4.7", "Mobile")
+
+[editor_plugins]
+
+enabled=PackedStringArray()
+
+[rendering]
+
+renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true
+
+[xr]
+
+openxr/enabled=true
+openxr/reference_space=2
+openxr/environment_blend_mode=2
+openxr/foveation_level=2
+openxr/foveation_dynamic=true
+openxr/extensions/hand_tracking=true
+openxr/extensions/hand_interaction_profile=true
+shaders/enabled=true

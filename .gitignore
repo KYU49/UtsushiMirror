@@ -1,0 +1,11 @@
+target/
+godot/.godot/
+*.tmp
+screenshots/
+recordings/
+**/*.log
+!assets/animations/*.vrma
+!assets/samples/*.vrm
+dist/
+out/
+godot/bin/

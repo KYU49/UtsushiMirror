@@ -1,0 +1,120 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/core/app_controller.gd" id="1_app"]
+[ext_resource type="Script" path="res://scripts/core/camera_rig.gd" id="2_cam"]
+[ext_resource type="Script" path="res://scripts/core/lighting_rig.gd" id="3_lit"]
+[ext_resource type="Script" path="res://scripts/core/background_manager.gd" id="4_bg"]
+[ext_resource type="Script" path="res://scripts/core/hotkey_manager.gd" id="5_hk"]
+[ext_resource type="Script" path="res://scripts/core/capture_manager.gd" id="6_cap"]
+[ext_resource type="PackedScene" path="res://scenes/settings_window.tscn" id="7_set"]
+
+[sub_resource type="Environment" id="Environment_main"]
+background_mode = 0
+background_color = Color(0, 0, 0, 0)
+ambient_light_source = 2
+ambient_light_color = Color(0.901961, 0.921569, 0.960784, 1)
+ambient_light_energy = 0.45
+tonemap_mode = 2
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_app")
+
+[node name="VrmBridge" type="VrmBridge" parent="."]
+
+[node name="MainBgLayer" type="CanvasLayer" parent="."]
+layer = -100
+
+[node name="MainBgRect" type="ColorRect" parent="MainBgLayer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.117647, 0.133333, 0.168627, 1)
+
+[node name="MainBgImage" type="TextureRect" parent="MainBgLayer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_main")
+
+[node name="KeyLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.819152, -0.286788, 0.496732, 0, 0.866025, 0.5, -0.573576, -0.409576, 0.709406, 0, 2, 0)
+light_energy = 1.15
+shadow_enabled = true
+
+[node name="FillLight" type="DirectionalLight3D" parent="."]
+light_color = Color(0.862745, 0.909804, 1, 1)
+light_energy = 0.42
+
+[node name="RimLight" type="DirectionalLight3D" parent="."]
+light_energy = 0.55
+
+[node name="MainCamera" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 2.2)
+current = true
+fov = 35.0
+near = 0.02
+
+[node name="ModelRoot" type="Node3D" parent="."]
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("2_cam")
+
+[node name="LightingRig" type="Node3D" parent="."]
+script = ExtResource("3_lit")
+
+[node name="BackgroundManager" type="Node" parent="."]
+script = ExtResource("4_bg")
+
+[node name="HotkeyManager" type="Node" parent="."]
+script = ExtResource("5_hk")
+
+[node name="CaptureManager" type="Node" parent="."]
+script = ExtResource("6_cap")
+
+[node name="OutputViewport" type="SubViewport" parent="."]
+transparent_bg = true
+size = Vector2i(1280, 720)
+render_target_update_mode = 0
+
+[node name="OutputBgLayer" type="CanvasLayer" parent="OutputViewport"]
+layer = -100
+
+[node name="OutputBgRect" type="ColorRect" parent="OutputViewport/OutputBgLayer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="OutputBgImage" type="TextureRect" parent="OutputViewport/OutputBgLayer"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="OutputCamera" type="Camera3D" parent="OutputViewport"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 2.2)
+cull_mask = 1
+fov = 35.0
+near = 0.02
+
+[node name="SettingsWindow" parent="." instance=ExtResource("7_set")]

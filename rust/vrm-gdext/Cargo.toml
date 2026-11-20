@@ -1,0 +1,23 @@
+[package]
+name = "vrm-gdext"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+godot.workspace = true
+vrm-protocol = { path = "../vrm-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+rosc.workspace = true
+crossbeam-channel.workspace = true
+base64.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true

@@ -1,0 +1,125 @@
+{
+ "specVersion": "0.1",
+ "id": "ual1_punch_jab",
+ "name": "Punch_Jab",
+ "description": "Punch Jab",
+ "duration": 0.87,
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "Universal Animation Library by Quaternius (CC0 1.0)",
+  "authors": [
+   {
+    "name": "Quaternius",
+    "url": "https://quaternius.com/"
+   }
+  ],
+  "source": {
+   "kind": "keyframe",
+   "url": "https://quaternius.com/packs/universalanimationlibrary.html",
+   "originalId": "Punch_Jab",
+   "originalFormat": "glb",
+   "converter": "open-vrma/quaternius2vrma@0.1"
+  }
+ },
+ "tags": {
+  "kind": "sports",
+  "genre": [],
+  "energy": 3,
+  "bodyParts": [
+   "arms"
+  ],
+  "locomotion": "in-place",
+  "facing": "front",
+  "floorWork": false,
+  "airborne": false,
+  "fingers": true,
+  "expressions": false,
+  "lookAt": false,
+  "rootMotion": false
+ },
+ "tempo": {
+  "bpm": null,
+  "confidence": 0
+ },
+ "loop": {
+  "in": 0,
+  "out": 0.87,
+  "mode": "cycle",
+  "blend": 0.1,
+  "poseDiffDeg": 0
+ },
+ "events": [
+  {
+   "t": 0.867,
+   "type": "lift",
+   "side": "left"
+  },
+  {
+   "t": 0.867,
+   "type": "lift",
+   "side": "right"
+  }
+ ],
+ "ranges": [
+  {
+   "from": 0,
+   "to": 0.867,
+   "type": "footLock",
+   "side": "left"
+  },
+  {
+   "from": 0,
+   "to": 0.867,
+   "type": "footLock",
+   "side": "right"
+  }
+ ],
+ "root": {
+  "netTravel": 0,
+  "maxTravel": 0.07,
+  "netTurnDeg": 0,
+  "turnRangeDeg": 9,
+  "hipsBounce": 0
+ },
+ "poses": {
+  "start": "stand",
+  "end": "stand",
+  "startSupport": "both",
+  "endSupport": "both",
+  "startArms": "down",
+  "endArms": "down"
+ },
+ "retarget": {
+  "restPose": "T",
+  "sourceHipHeight": 0.9,
+  "floorAligned": true
+ },
+ "provenance": {
+  "tags": "auto",
+  "tempo": "auto",
+  "events": "auto",
+  "ranges": "auto"
+ },
+ "x": {
+  "openVrma": {
+   "pathTravel": 0.19,
+   "angularSpeed": {
+    "legs": 0.44,
+    "arms": 2.42,
+    "torso": 0.59
+   },
+   "bodyShare": {
+    "head": 0.2,
+    "torso": 0.12,
+    "arms": 0.42,
+    "hands": 0.01,
+    "hips": 0.11,
+    "legs": 0.14
+   },
+   "energy": 0.43,
+   "airborne": 0,
+   "lowHips": 0
+  }
+ }
+}

@@ -1,0 +1,128 @@
+{
+ "specVersion": "0.1",
+ "id": "ual1_roll",
+ "name": "Roll",
+ "description": "Roll",
+ "duration": 1.47,
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "Universal Animation Library by Quaternius (CC0 1.0)",
+  "authors": [
+   {
+    "name": "Quaternius",
+    "url": "https://quaternius.com/"
+   }
+  ],
+  "source": {
+   "kind": "keyframe",
+   "url": "https://quaternius.com/packs/universalanimationlibrary.html",
+   "originalId": "Roll",
+   "originalFormat": "glb",
+   "converter": "open-vrma/quaternius2vrma@0.1"
+  }
+ },
+ "tags": {
+  "kind": "action",
+  "genre": [],
+  "energy": 5,
+  "bodyParts": [
+   "full"
+  ],
+  "locomotion": "traveling",
+  "facing": "front",
+  "floorWork": true,
+  "airborne": true,
+  "fingers": true,
+  "expressions": false,
+  "lookAt": false,
+  "rootMotion": false
+ },
+ "tempo": {
+  "bpm": null,
+  "confidence": 0
+ },
+ "events": [
+  {
+   "t": 0.9,
+   "type": "contact",
+   "side": "left"
+  },
+  {
+   "t": 0.9,
+   "type": "contact",
+   "side": "right"
+  },
+  {
+   "t": 1.467,
+   "type": "lift",
+   "side": "left"
+  },
+  {
+   "t": 1.467,
+   "type": "lift",
+   "side": "right"
+  }
+ ],
+ "ranges": [
+  {
+   "from": 0.9,
+   "to": 1.467,
+   "type": "footLock",
+   "side": "left"
+  },
+  {
+   "from": 0.9,
+   "to": 1.467,
+   "type": "footLock",
+   "side": "right"
+  }
+ ],
+ "root": {
+  "netTravel": 0.11,
+  "maxTravel": 0.35,
+  "netTurnDeg": -4,
+  "turnRangeDeg": 167,
+  "hipsBounce": 1.17
+ },
+ "poses": {
+  "start": "kneel",
+  "end": "stand",
+  "startSupport": "both",
+  "endSupport": "both",
+  "startArms": "down",
+  "endArms": "down"
+ },
+ "retarget": {
+  "restPose": "T",
+  "sourceHipHeight": 0.9,
+  "floorAligned": true
+ },
+ "provenance": {
+  "tags": "auto",
+  "tempo": "auto",
+  "events": "auto",
+  "ranges": "auto"
+ },
+ "x": {
+  "openVrma": {
+   "pathTravel": 1.09,
+   "angularSpeed": {
+    "legs": 5.99,
+    "arms": 4.14,
+    "torso": 0.79
+   },
+   "bodyShare": {
+    "head": 0.09,
+    "torso": 0.02,
+    "arms": 0.18,
+    "hands": 0.09,
+    "hips": 0.26,
+    "legs": 0.36
+   },
+   "energy": 3.53,
+   "airborne": 0.44,
+   "lowHips": 0.29
+  }
+ }
+}

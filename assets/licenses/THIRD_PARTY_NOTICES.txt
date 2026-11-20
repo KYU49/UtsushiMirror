@@ -1,0 +1,164 @@
+VRMViewer — サードパーティのライセンス / Third-party notices
+================================================================
+
+このソフトウェアは次のオープンソース・素材を利用しています。
+Godot Engine 本体とその内蔵ライブラリのライセンス全文は、この下 (アプリ内表示) に続けて表示されます。
+
+[エンジン / Engine]
+- Godot Engine — MIT License — Copyright (c) 2014-present Godot Engine contributors; (c) 2007-2014 Juan Linietsky, Ariel Manzur.
+  https://godotengine.org/license
+- Godot OpenXR Vendors plugin (XR 版のみ) — MIT License — Copyright (c) 2022-present Godot XR contributors
+  https://github.com/GodotVR/godot_openxr_vendors
+
+[同梱アニメーション / Bundled animations]
+- assets/animations/*.vrma (直下) — このプロジェクトで作成したもの
+- Universal Animation Library 2 by Quaternius (CC0 1.0)
+    License: CC0-1.0 https://creativecommons.org/publicdomain/zero/1.0/
+    Source: https://quaternius.itch.io/universal-animation-library-2
+    VRMA conversion: open-vrma (CC0 1.0) https://huggingface.co/datasets/Sanami/open-vrma
+    Files: Consume, Idle_FoldArms_Loop, Idle_No_Loop, Idle_TalkingPhone_Loop, LayToIdle, Yes
+- Universal Animation Library by Quaternius (CC0 1.0)
+    License: CC0-1.0 https://creativecommons.org/publicdomain/zero/1.0/
+    Source: https://quaternius.com/packs/universalanimationlibrary.html
+    VRMA conversion: open-vrma (CC0 1.0) https://huggingface.co/datasets/Sanami/open-vrma
+    Files: Crouch_Idle_Loop, Dance_Loop, Hit_Chest, Idle_Loop, Idle_Talking_Loop, Interact, Jog_Fwd_Loop, Jump_Loop, PickUp_Table, Punch_Jab, Roll, Sitting_Enter, Sitting_Exit, Sitting_Idle_Loop, Sitting_Talking_Loop, Spell_Simple_Idle_Loop, Spell_Simple_Shoot, Sprint_Loop, Sword_Idle, Walk_Formal_Loop, Walk_Loop
+
+[同梱サンプルモデル / Bundled sample models]
+- Seed-san.vrm — (c) VirtualCast, Inc. — VRM Public License 1.0 https://vrm.dev/licenses/1.0/
+- VRM1_Constraint_Twist_Sample.vrm — (c) 2022 pixiv Inc. — VRM Public License 1.0 https://vrm.dev/licenses/1.0/
+
+[Webカメラトラッカー (tracker/, 別プロセス) / Webcam tracker]
+- MediaPipe (ライブラリとモデル) — Apache License 2.0 — Copyright Google LLC https://github.com/google-ai-edge/mediapipe
+- OpenCV (opencv-python) — Apache License 2.0 https://opencv.org/license/
+- NumPy — BSD 3-Clause https://numpy.org/license/
+- cv2-enumerate-cameras — MIT License https://github.com/chinaheyu/cv2_enumerate_cameras
+- websockets — BSD 3-Clause https://github.com/python-websockets/websockets
+
+[Rust ライブラリ / Rust crates] (101 個)
+MPL-2.0 のもの (godot-rust 等) のソースは各リポジトリで公開されています。
+- anstream 1.0.0 — MIT OR Apache-2.0 — - https://github.com/rust-cli/anstyle.git
+- anstyle 1.0.14 — MIT OR Apache-2.0 — - https://github.com/rust-cli/anstyle.git
+- anstyle-parse 1.0.0 — MIT OR Apache-2.0 — - https://github.com/rust-cli/anstyle.git
+- anstyle-query 1.1.5 — MIT OR Apache-2.0 — - https://github.com/rust-cli/anstyle.git
+- anstyle-wincon 3.0.11 — MIT OR Apache-2.0 — - https://github.com/rust-cli/anstyle.git
+- anyhow 1.0.104 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/anyhow
+- base64 0.23.1 — MIT OR Apache-2.0 — Marshall Pierce https://github.com/marshallpierce/rust-base64
+- block-buffer 0.12.1 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/utils
+- byteorder 1.5.0 — Unlicense OR MIT — Andrew Gallant https://github.com/BurntSushi/byteorder
+- bytes 1.12.2 — MIT — Carl Lerche, Sean McArthur https://github.com/tokio-rs/bytes
+- cfg-if 1.0.5 — MIT OR Apache-2.0 — Alex Crichton https://github.com/rust-lang/cfg-if
+- chacha20 0.10.2 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/stream-ciphers
+- clap 4.6.8 — MIT OR Apache-2.0 — - https://github.com/clap-rs/clap
+- clap_builder 4.6.7 — MIT OR Apache-2.0 — - https://github.com/clap-rs/clap
+- clap_derive 4.6.8 — MIT OR Apache-2.0 — - https://github.com/clap-rs/clap
+- clap_lex 1.1.2 — MIT OR Apache-2.0 — - https://github.com/clap-rs/clap
+- colorchoice 1.0.5 — MIT OR Apache-2.0 — - https://github.com/rust-cli/anstyle.git
+- const-oid 0.10.3 — Apache-2.0 OR MIT — RustCrypto Developers https://github.com/RustCrypto/formats
+- cpufeatures 0.3.1 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/utils
+- crossbeam-channel 0.5.17 — MIT OR Apache-2.0 — - https://github.com/crossbeam-rs/crossbeam
+- crossbeam-utils 0.8.23 — MIT OR Apache-2.0 — - https://github.com/crossbeam-rs/crossbeam
+- crypto-common 0.2.2 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/traits
+- data-encoding 2.11.1 — MIT — - https://github.com/ia0/data-encoding
+- deranged 0.5.9 — MIT OR Apache-2.0 — Jacob Pratt https://github.com/jhpratt/deranged
+- digest 0.11.3 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/traits
+- futures-core 0.3.34 — MIT OR Apache-2.0 — - https://github.com/rust-lang/futures-rs
+- futures-macro 0.3.34 — MIT OR Apache-2.0 — - https://github.com/rust-lang/futures-rs
+- futures-sink 0.3.34 — MIT OR Apache-2.0 — - https://github.com/rust-lang/futures-rs
+- futures-task 0.3.34 — MIT OR Apache-2.0 — - https://github.com/rust-lang/futures-rs
+- futures-util 0.3.34 — MIT OR Apache-2.0 — - https://github.com/rust-lang/futures-rs
+- gdextension-api 0.5.1 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- getrandom 0.4.3 — MIT OR Apache-2.0 — The Rand Project Developers https://github.com/rust-random/getrandom
+- glam 0.32.1 — MIT OR Apache-2.0 — Cameron Hart https://github.com/bitshifter/glam-rs
+- godot 0.5.5 — MPL-2.0 — Bromeon, godot-rust contributors https://github.com/godot-rust/gdext
+- godot-bindings 0.5.5 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- godot-cell 0.5.5 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- godot-codegen 0.5.5 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- godot-core 0.5.5 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- godot-ffi 0.5.5 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- godot-macros 0.5.5 — MPL-2.0 — - https://github.com/godot-rust/gdext
+- heck 0.5.0 — MIT OR Apache-2.0 — - https://github.com/withoutboats/heck
+- http 1.5.0 — MIT OR Apache-2.0 — Alex Crichton, Carl Lerche, Sean McArthur https://github.com/hyperium/http
+- httparse 1.10.1 — MIT OR Apache-2.0 — Sean McArthur https://github.com/seanmonstar/httparse
+- hybrid-array 0.4.15 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/hybrid-array
+- is_terminal_polyfill 1.70.2 — MIT OR Apache-2.0 — - https://github.com/polyfill-rs/is_terminal_polyfill
+- itoa 1.0.19 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/itoa
+- libc 0.2.191 — MIT OR Apache-2.0 — - https://github.com/rust-lang/libc
+- log 0.4.35 — MIT OR Apache-2.0 — The Rust Project Developers https://github.com/rust-lang/log
+- memchr 2.8.3 — Unlicense OR MIT — Andrew Gallant, bluss https://github.com/BurntSushi/memchr
+- minimal-lexical 0.2.1 — MIT/Apache-2.0 — Alex Huszagh https://github.com/Alexhuszagh/minimal-lexical
+- mio 1.2.5 — MIT — Carl Lerche, Thomas de Zeeuw, Tokio Contributors https://github.com/tokio-rs/mio
+- nanoserde 0.2.1 — MIT OR Apache-2.0 — makepad, Fedor https://github.com/not-fl3/nanoserde
+- nanoserde-derive 0.2.1 — MIT — Makepad, Fedor
+- nom 7.1.3 — MIT — contact@geoffroycouprie.com https://github.com/Geal/nom
+- num-conv 0.2.2 — MIT OR Apache-2.0 — Jacob Pratt https://github.com/jhpratt/num-conv
+- once_cell_polyfill 1.70.2 — MIT OR Apache-2.0 — - https://github.com/polyfill-rs/once_cell_polyfill
+- pin-project-lite 0.2.17 — Apache-2.0 OR MIT — - https://github.com/taiki-e/pin-project-lite
+- powerfmt 0.2.1 — MIT OR Apache-2.0 — Jacob Pratt https://github.com/jhpratt/powerfmt
+- proc-macro2 1.0.107 — MIT OR Apache-2.0 — David Tolnay, Alex Crichton https://github.com/dtolnay/proc-macro2
+- quote 1.0.47 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/quote
+- r-efi 6.0.0 — MIT OR Apache-2.0 OR LGPL-2.1-or-later — - https://github.com/r-efi/r-efi
+- rand 0.10.4 — MIT OR Apache-2.0 — The Rand Project Developers, The Rust Project Developers https://github.com/rust-random/rand
+- rand_core 0.10.1 — MIT OR Apache-2.0 — The Rand Project Developers https://github.com/rust-random/rand_core
+- rosc 0.11.4 — MIT/Apache-2.0 — Andreas Linz https://github.com/klingtnet/rosc
+- serde 1.0.229 — MIT OR Apache-2.0 — Erick Tryzelaar, David Tolnay https://github.com/serde-rs/serde
+- serde_core 1.0.229 — MIT OR Apache-2.0 — Erick Tryzelaar, David Tolnay https://github.com/serde-rs/serde
+- serde_derive 1.0.229 — MIT OR Apache-2.0 — Erick Tryzelaar, David Tolnay https://github.com/serde-rs/serde
+- serde_json 1.0.154 — MIT OR Apache-2.0 — - https://github.com/serde-rs/json
+- sha1 0.11.0 — MIT OR Apache-2.0 — RustCrypto Developers https://github.com/RustCrypto/hashes
+- slab 0.4.12 — MIT — Carl Lerche https://github.com/tokio-rs/slab
+- socket2 0.6.5 — MIT OR Apache-2.0 — Alex Crichton, Thomas de Zeeuw https://github.com/rust-lang/socket2
+- strsim 0.11.1 — MIT — Danny Guo, maxbachmann https://github.com/rapidfuzz/strsim-rs
+- syn 2.0.119 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/syn
+- syn 3.0.10 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/syn
+- thiserror 2.0.21 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/thiserror
+- thiserror-impl 2.0.21 — MIT OR Apache-2.0 — David Tolnay https://github.com/dtolnay/thiserror
+- time 0.3.55 — MIT OR Apache-2.0 — Jacob Pratt, Time contributors https://github.com/time-rs/time
+- time-core 0.1.9 — MIT OR Apache-2.0 — Jacob Pratt, Time contributors https://github.com/time-rs/time
+- time-macros 0.2.32 — MIT OR Apache-2.0 — Jacob Pratt, Time contributors https://github.com/time-rs/time
+- tokio 1.54.1 — MIT — Tokio Contributors https://github.com/tokio-rs/tokio
+- tokio-macros 2.7.2 — MIT — Tokio Contributors https://github.com/tokio-rs/tokio
+- tokio-tungstenite 0.30.0 — MIT — Daniel Abramov, Alexey Galakhov https://github.com/snapview/tokio-tungstenite
+- tungstenite 0.30.0 — MIT OR Apache-2.0 — Alexey Galakhov, Daniel Abramov https://github.com/snapview/tungstenite-rs
+- typenum 1.20.1 — MIT OR Apache-2.0 — - https://github.com/paholg/typenum
+- unicode-ident 1.0.27 — (MIT OR Apache-2.0) AND Unicode-3.0 — David Tolnay https://github.com/dtolnay/unicode-ident
+- utf8parse 0.2.2 — Apache-2.0 OR MIT — Joe Wilm, Christian Duerr https://github.com/alacritty/vte
+- venial 0.6.1 — MIT — Olivier Faure https://github.com/PoignardAzur/venial
+- wasi 0.11.1+wasi-snapshot-preview1 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — The Cranelift Project Developers https://github.com/bytecodealliance/wasi
+- windows 0.62.2 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-collections 0.3.2 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-core 0.62.2 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-future 0.3.2 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-implement 0.60.2 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-interface 0.59.3 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-link 0.2.1 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-numerics 0.3.1 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-result 0.4.1 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-strings 0.5.1 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-sys 0.61.2 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- windows-threading 0.2.1 — MIT OR Apache-2.0 — - https://github.com/microsoft/windows-rs
+- zmij 1.0.23 — MIT — David Tolnay https://github.com/dtolnay/zmij
+
+[MIT License 本文 / MIT License text] (上記で MIT とあるもの全てに適用。著作権表示は各項目を参照)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+[Apache License 2.0] https://www.apache.org/licenses/LICENSE-2.0
+[Mozilla Public License 2.0] https://mozilla.org/MPL/2.0/
+[BSD 3-Clause] https://opensource.org/license/bsd-3-clause
+[CC0 1.0] https://creativecommons.org/publicdomain/zero/1.0/

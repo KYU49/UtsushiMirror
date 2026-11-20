@@ -1,0 +1,114 @@
+{
+ "specVersion": "0.1",
+ "id": "ual2_consume",
+ "name": "Consume",
+ "description": "Consume",
+ "duration": 1.33,
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "Universal Animation Library 2 by Quaternius (CC0 1.0)",
+  "authors": [
+   {
+    "name": "Quaternius",
+    "url": "https://quaternius.com/"
+   }
+  ],
+  "source": {
+   "kind": "keyframe",
+   "url": "https://quaternius.itch.io/universal-animation-library-2",
+   "originalId": "Consume",
+   "originalFormat": "glb",
+   "converter": "open-vrma/quaternius2vrma@0.1"
+  }
+ },
+ "tags": {
+  "kind": "action",
+  "genre": [],
+  "energy": 2,
+  "bodyParts": [
+   "arms",
+   "hands"
+  ],
+  "locomotion": "in-place",
+  "facing": "front",
+  "floorWork": false,
+  "airborne": false,
+  "fingers": true,
+  "expressions": false,
+  "lookAt": false,
+  "rootMotion": false
+ },
+ "tempo": {
+  "bpm": null,
+  "confidence": 0
+ },
+ "loop": {
+  "in": 0,
+  "out": 1.33,
+  "mode": "cycle",
+  "blend": 0.1,
+  "poseDiffDeg": 0
+ },
+ "ranges": [
+  {
+   "from": 0,
+   "to": 1.33,
+   "type": "footLock",
+   "side": "left"
+  },
+  {
+   "from": 0,
+   "to": 1.33,
+   "type": "footLock",
+   "side": "right"
+  }
+ ],
+ "root": {
+  "netTravel": 0,
+  "maxTravel": 0,
+  "netTurnDeg": 0,
+  "turnRangeDeg": 12,
+  "hipsBounce": 0
+ },
+ "poses": {
+  "start": "stand",
+  "end": "stand",
+  "startSupport": "both",
+  "endSupport": "both",
+  "startArms": "other",
+  "endArms": "other"
+ },
+ "retarget": {
+  "restPose": "T",
+  "sourceHipHeight": 0.9,
+  "floorAligned": true
+ },
+ "provenance": {
+  "tags": "auto",
+  "tempo": "auto",
+  "events": "auto",
+  "ranges": "auto"
+ },
+ "x": {
+  "openVrma": {
+   "pathTravel": 0,
+   "angularSpeed": {
+    "legs": 0.25,
+    "arms": 1.81,
+    "torso": 0.32
+   },
+   "bodyShare": {
+    "head": 0.2,
+    "torso": 0.03,
+    "arms": 0.36,
+    "hands": 0.25,
+    "hips": 0.09,
+    "legs": 0.08
+   },
+   "energy": 0.32,
+   "airborne": 0,
+   "lowHips": 0
+  }
+ }
+}

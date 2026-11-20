@@ -1,0 +1,141 @@
+{
+ "specVersion": "0.1",
+ "id": "ual1_walk_loop",
+ "name": "Walk_Loop",
+ "description": "Walk Loop",
+ "duration": 1.33,
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "Universal Animation Library by Quaternius (CC0 1.0)",
+  "authors": [
+   {
+    "name": "Quaternius",
+    "url": "https://quaternius.com/"
+   }
+  ],
+  "source": {
+   "kind": "keyframe",
+   "url": "https://quaternius.com/packs/universalanimationlibrary.html",
+   "originalId": "Walk_Loop",
+   "originalFormat": "glb",
+   "converter": "open-vrma/quaternius2vrma@0.1"
+  }
+ },
+ "tags": {
+  "kind": "walk",
+  "genre": [],
+  "energy": 4,
+  "bodyParts": [
+   "full"
+  ],
+  "locomotion": "in-place",
+  "facing": "front",
+  "floorWork": false,
+  "airborne": false,
+  "fingers": true,
+  "expressions": false,
+  "lookAt": false,
+  "rootMotion": false
+ },
+ "tempo": {
+  "bpm": 90.2,
+  "beatsPerBar": 4,
+  "firstBeat": 0,
+  "confidence": 1,
+  "basis": "steps",
+  "alternatives": [
+   180.4,
+   45.1
+  ]
+ },
+ "loop": {
+  "in": 0,
+  "out": 1.33,
+  "mode": "cycle",
+  "blend": 0.1,
+  "beats": 2,
+  "poseDiffDeg": 0
+ },
+ "events": [
+  {
+   "t": 0.033,
+   "type": "lift",
+   "side": "right"
+  },
+  {
+   "t": 0.667,
+   "type": "contact",
+   "side": "right"
+  },
+  {
+   "t": 0.833,
+   "type": "lift",
+   "side": "left"
+  }
+ ],
+ "ranges": [
+  {
+   "from": 0,
+   "to": 0.833,
+   "type": "footLock",
+   "side": "left"
+  },
+  {
+   "from": 0.667,
+   "to": 1.33,
+   "type": "footLock",
+   "side": "right"
+  }
+ ],
+ "root": {
+  "netTravel": 0,
+  "maxTravel": 0.06,
+  "netTurnDeg": 0,
+  "turnRangeDeg": 4,
+  "hipsBounce": 0.06
+ },
+ "poses": {
+  "start": "stand",
+  "end": "stand",
+  "startSupport": "both",
+  "endSupport": "both",
+  "startArms": "other",
+  "endArms": "other"
+ },
+ "retarget": {
+  "restPose": "T",
+  "sourceHipHeight": 0.9,
+  "floorAligned": true,
+  "checkedOn": [
+   "vrm1-sample"
+  ]
+ },
+ "provenance": {
+  "tags": "auto",
+  "tempo": "auto",
+  "events": "auto",
+  "ranges": "auto"
+ },
+ "x": {
+  "openVrma": {
+   "pathTravel": 0.16,
+   "angularSpeed": {
+    "legs": 2.43,
+    "arms": 0.83,
+    "torso": 0.17
+   },
+   "bodyShare": {
+    "head": 0.07,
+    "torso": 0.04,
+    "arms": 0.19,
+    "hands": 0.01,
+    "hips": 0.05,
+    "legs": 0.64
+   },
+   "energy": 0.81,
+   "airborne": 0,
+   "lowHips": 0
+  }
+ }
+}

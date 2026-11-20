@@ -1,0 +1,17 @@
+[package]
+name = "vrm-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vrmviewer-mcp"
+path = "src/main.rs"
+
+[dependencies]
+vrm-protocol = { path = "../vrm-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true
+anyhow.workspace = true
+base64.workspace = true

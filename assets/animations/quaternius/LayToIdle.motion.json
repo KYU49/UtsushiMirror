@@ -1,0 +1,157 @@
+{
+ "specVersion": "0.1",
+ "id": "ual2_laytoidle",
+ "name": "LayToIdle",
+ "description": "LayToIdle",
+ "duration": 1.53,
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "Universal Animation Library 2 by Quaternius (CC0 1.0)",
+  "authors": [
+   {
+    "name": "Quaternius",
+    "url": "https://quaternius.com/"
+   }
+  ],
+  "source": {
+   "kind": "keyframe",
+   "url": "https://quaternius.itch.io/universal-animation-library-2",
+   "originalId": "LayToIdle",
+   "originalFormat": "glb",
+   "converter": "open-vrma/quaternius2vrma@0.1"
+  }
+ },
+ "tags": {
+  "kind": "idle",
+  "genre": [],
+  "energy": 5,
+  "bodyParts": [
+   "arms"
+  ],
+  "locomotion": "spinning",
+  "facing": "turning",
+  "floorWork": true,
+  "airborne": false,
+  "fingers": true,
+  "expressions": false,
+  "lookAt": false,
+  "rootMotion": false
+ },
+ "tempo": {
+  "bpm": null,
+  "confidence": 0
+ },
+ "loop": {
+  "in": 0,
+  "out": 1.53,
+  "mode": "cycle",
+  "blend": 0.1,
+  "poseDiffDeg": 0
+ },
+ "events": [
+  {
+   "t": 0.067,
+   "type": "lift",
+   "side": "right"
+  },
+  {
+   "t": 0.333,
+   "type": "contact",
+   "side": "right"
+  },
+  {
+   "t": 1,
+   "type": "lift",
+   "side": "right"
+  },
+  {
+   "t": 1.267,
+   "type": "contact",
+   "side": "right"
+  },
+  {
+   "t": 1.467,
+   "type": "lift",
+   "side": "left"
+  },
+  {
+   "t": 1.467,
+   "type": "lift",
+   "side": "right"
+  }
+ ],
+ "ranges": [
+  {
+   "from": 0,
+   "to": 1.467,
+   "type": "footLock",
+   "side": "left"
+  },
+  {
+   "from": 0,
+   "to": 0.067,
+   "type": "footLock",
+   "side": "right"
+  },
+  {
+   "from": 0.333,
+   "to": 1,
+   "type": "footLock",
+   "side": "right"
+  },
+  {
+   "from": 1.267,
+   "to": 1.467,
+   "type": "footLock",
+   "side": "right"
+  }
+ ],
+ "root": {
+  "netTravel": 0,
+  "maxTravel": 0.17,
+  "netTurnDeg": -360,
+  "turnRangeDeg": 360,
+  "hipsBounce": 0.88
+ },
+ "poses": {
+  "start": "lie",
+  "end": "lie",
+  "startSupport": "both",
+  "endSupport": "both",
+  "startArms": "hips",
+  "endArms": "hips"
+ },
+ "retarget": {
+  "restPose": "T",
+  "sourceHipHeight": 0.9,
+  "floorAligned": true
+ },
+ "provenance": {
+  "tags": "auto",
+  "tempo": "auto",
+  "events": "auto",
+  "ranges": "auto"
+ },
+ "x": {
+  "openVrma": {
+   "pathTravel": 0.4,
+   "angularSpeed": {
+    "legs": 2.82,
+    "arms": 4.66,
+    "torso": 0.72
+   },
+   "bodyShare": {
+    "head": 0.09,
+    "torso": 0.05,
+    "arms": 0.27,
+    "hands": 0.15,
+    "hips": 0.23,
+    "legs": 0.22
+   },
+   "energy": 2.05,
+   "airborne": 0,
+   "lowHips": 0.77
+  }
+ }
+}

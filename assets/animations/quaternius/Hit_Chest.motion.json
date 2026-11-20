@@ -1,0 +1,106 @@
+{
+ "specVersion": "0.1",
+ "id": "ual1_hit_chest",
+ "name": "Hit_Chest",
+ "description": "Hit Chest",
+ "duration": 0.33,
+ "license": {
+  "spdx": "CC0-1.0",
+  "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "Universal Animation Library by Quaternius (CC0 1.0)",
+  "authors": [
+   {
+    "name": "Quaternius",
+    "url": "https://quaternius.com/"
+   }
+  ],
+  "source": {
+   "kind": "keyframe",
+   "url": "https://quaternius.com/packs/universalanimationlibrary.html",
+   "originalId": "Hit_Chest",
+   "originalFormat": "glb",
+   "converter": "open-vrma/quaternius2vrma@0.1"
+  }
+ },
+ "tags": {
+  "kind": "action",
+  "genre": [],
+  "energy": 3,
+  "bodyParts": [
+   "hands"
+  ],
+  "locomotion": "in-place",
+  "facing": "front",
+  "floorWork": false,
+  "airborne": false,
+  "fingers": true,
+  "expressions": false,
+  "lookAt": false,
+  "rootMotion": false
+ },
+ "tempo": {
+  "bpm": null,
+  "confidence": 0
+ },
+ "ranges": [
+  {
+   "from": 0,
+   "to": 0.33,
+   "type": "footLock",
+   "side": "left"
+  },
+  {
+   "from": 0,
+   "to": 0.33,
+   "type": "footLock",
+   "side": "right"
+  }
+ ],
+ "root": {
+  "netTravel": 0.03,
+  "maxTravel": 0.03,
+  "netTurnDeg": 0,
+  "turnRangeDeg": 0,
+  "hipsBounce": 0.02
+ },
+ "poses": {
+  "start": "stand",
+  "end": "stand",
+  "startSupport": "both",
+  "endSupport": "both",
+  "startArms": "other",
+  "endArms": "other"
+ },
+ "retarget": {
+  "restPose": "T",
+  "sourceHipHeight": 0.9,
+  "floorAligned": true
+ },
+ "provenance": {
+  "tags": "auto",
+  "tempo": "auto",
+  "events": "auto",
+  "ranges": "auto"
+ },
+ "x": {
+  "openVrma": {
+   "pathTravel": 0.03,
+   "angularSpeed": {
+    "legs": 0.45,
+    "arms": 1.41,
+    "torso": 0.76
+   },
+   "bodyShare": {
+    "head": 0.23,
+    "torso": 0.06,
+    "arms": 0.16,
+    "hands": 0.4,
+    "hips": 0.09,
+    "legs": 0.07
+   },
+   "energy": 0.47,
+   "airborne": 0,
+   "lowHips": 0
+  }
+ }
+}

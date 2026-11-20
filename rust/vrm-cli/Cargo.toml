@@ -1,0 +1,19 @@
+[package]
+name = "vrm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vrmviewer-cli"
+path = "src/main.rs"
+
+[dependencies]
+vrm-protocol = { path = "../vrm-protocol" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true
+rosc.workspace = true
+anyhow.workspace = true
+base64.workspace = true
