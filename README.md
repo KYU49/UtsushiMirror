@@ -44,8 +44,43 @@ VRM のキャラクターをデスクトップに表示して、Web カメラだ
 3. 展開したフォルダの `UtsushiMirror.exe` を起動します。
    - 「Windows によって PC が保護されました」と出たときは、「詳細情報」→「実行」を押してください (署名していないアプリのため表示されます)。
 
-アンインストールは、展開したフォルダを消すだけです。
-設定は `%APPDATA%\UtsushiMirror` に保存されているので、設定も消すときはこのフォルダも消してください。
+---
+
+## アンインストール
+
+うつしみらーはインストーラーを使わないので、下の場所を消せば元に戻ります。レジストリには何も書きません (仮想カメラを登録したときだけ例外。下の表を参照)。
+
+### うつしみらーが作るもの
+| 場所 | 中身 | 消し方 |
+|---|---|---|
+| 展開したフォルダ (例: `C:\Tools\UtsushiMirror`) | アプリ本体。その中に作られるものもあります:<br>・`tracker\.venv` … トラッキング用の Python の環境 (約 400 MB)<br>・`tracker\models` … 初めてトラッキングしたときにダウンロードする顔・体の認識モデル<br>・`screenshots`、`recordings` … スクリーンショットと録画の既定の保存先 | フォルダごと消します。残したい画像や動画は先に移してください |
+| `%APPDATA%\UtsushiMirror` | 設定 (`vrmviewer_config.json`)、プリセット (`presets`)、トラッキングの設定と補正 (`tracker_settings.json`、`tracker_calibration.json`)、トラッキング用のシステムのインストールの記録 (`tracker_install.log`)、動作の記録 (`logs`)、描画のキャッシュ (`shader_cache`、`vulkan`) | フォルダごと消します。設定を残して入れ直すときは、消さずに残してください |
+
+### トラッキング用のシステムを入れたときに入るもの
+設定画面の「トラッキング」ページからインストールしたとき、うつしみらーのフォルダの外にも次のものが入ります。
+uv は他のアプリでも使う道具なので、**うつしみらーのために初めて入れた場合だけ**消してください。
+
+| 場所 | 中身 |
+|---|---|
+| `%USERPROFILE%\.local\bin\uv.exe`、`uvx.exe`、`uvw.exe` | uv 本体 (uv が入っていなかったときだけ入れます) |
+| ユーザーの環境変数 `PATH` の `%USERPROFILE%\.local\bin` | uv を入れたときに、uv のインストーラーが足します |
+| `%APPDATA%\uv\python` | uv が用意した Python 3.11 (約 70 MB) |
+| `%LOCALAPPDATA%\uv\cache` | ダウンロードしたライブラリのキャッシュ (数百 MB) |
+
+uv ごと消すときは、PowerShell で次の順に実行します ([uv の公式の手順](https://docs.astral.sh/uv/getting-started/installation/#uninstallation)と同じです)。
+
+```powershell
+uv cache clean
+Remove-Item -Recurse -Force "$(uv python dir)", "$(uv tool dir)"
+Remove-Item "$env:USERPROFILE\.local\bin\uv.exe", "$env:USERPROFILE\.local\bin\uvx.exe", "$env:USERPROFILE\.local\bin\uvw.exe"
+```
+
+最後に、「環境変数を編集」(Windows の検索で出ます) で、ユーザーの `Path` から `%USERPROFILE%\.local\bin` の行を消してください (他に何も入っていなければ)。
+uv は残して容量だけ空けたいときは、`uv cache clean` だけでも十分です。
+
+### 仮想カメラを登録したとき
+`scripts\register_vcam.ps1` は、OBS Studio に入っている仮想カメラのドライバ (`obs-virtualcam-module64.dll`) を Windows に登録するだけで、うつしみらー独自のものは入れません。
+OBS の仮想カメラと同じものなので、OBS を使い続けるなら登録はそのままにしてください。OBS ごと消すときは、OBS のアンインストールで一緒に消えます。
 
 ---
 
