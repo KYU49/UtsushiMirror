@@ -194,6 +194,11 @@ MCP では、モデル・表情・ポーズ・カメラ・撮影などの操作�
 | `vrm_talk` | 文 (`text`) や長さ (`duration_sec`) を渡すと、しゃべっているように口を動かします。かなは「あいうえお」の口の形に合わせます (音は出しません) |
 | `vrm_walk` | 前後左右 (`direction`)・角度・行き先を指定すると、そちらを向いて歩き、着いたらカメラの方を向きます。キャラクターから見た向きか、画面から見た向きかを選べます |
 | `vrm_stop_talk` / `vrm_stop_walk` | しゃべる・歩くを途中で止めます |
+| `vrm_turn` | その場でくるっと回ります (`angle_deg: 360` で 1 回転)。`to: "camera"` でカメラの方を向きます |
+| `vrm_set_model_transform` | キャラクターの位置・向き・大きさを決めます (画面の端から歩いてこさせるときなど) |
+| `vrm_apply_pose_preset` | ピース・手を振るなどのポーズ。`keep_animation` で待機のアニメーションを止めずに重ねられます |
+| `vrm_set_bones` / `vrm_reset_pose` | ボーンを直接動かす・戻す。`transition_sec` を付けると、今の姿勢からなめらかに移ります |
+| `vrm_set_output_viewport` | 録画・Spout・仮想カメラの出力の大きさと背景。録画 (mp4) に背景を付けるときは `background_mode: "match_main"` にします (既定は透過で、mp4 では黒になります) |
 | `vrm_apply_shader_preset` | プリセットのフォルダのシェーダー設定を名前で選びます |
 
 ---
