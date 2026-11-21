@@ -51,6 +51,9 @@ const DEFAULT_BONE_LIST: Array[String] = [
 var _tabs: TabContainer
 var _file_dialog_out_img: FileDialog
 var _status_footer_lbl: Label
+## 下の段の「最近の設定」ドロップダウン
+var _recent_cfg_btn: OptionButton
+var _recent_cfg_paths: Array[String] = []
 
 # Tab 1: Model
 var _model_status_lbl: Label
@@ -239,6 +242,7 @@ func bind_controller(ctrl) -> void:
 	if not controller.model_loaded.is_connected(_on_model_loaded):
 		controller.model_loaded.connect(_on_model_loaded)
 	_refresh_from_controller()
+	_refresh_recent_settings()
 	_refresh_fx_presets()
 
 
@@ -418,6 +422,14 @@ func _build_ui() -> void:
 	b_cfg_import.tooltip_text = "書き出した設定ファイルを読み込んで反映し、いつもの保存先にも保存します。"
 	b_cfg_import.pressed.connect(func(): _popup_at_vrm_dir(dlg_cfg_open))
 	footer.add_child(b_cfg_import)
+	_recent_cfg_btn = OptionButton.new()
+	_recent_cfg_btn.tooltip_text = "最近書き出した・読み込んだ設定ファイルを選んで読み込みます。"
+	_recent_cfg_btn.fit_to_longest_item = false
+	_recent_cfg_btn.custom_minimum_size.x = 150
+	_recent_cfg_btn.get_popup().about_to_popup.connect(_refresh_recent_settings)
+	_recent_cfg_btn.item_selected.connect(_on_recent_settings_selected)
+	footer.add_child(_recent_cfg_btn)
+	_refresh_recent_settings()
 
 	_status_footer_lbl = Label.new()
 	_status_footer_lbl.theme_type_variation = "DimLabel"
@@ -1265,6 +1277,40 @@ func _build_tab_effects() -> void:
 
 ## 書き出し・読み込みの画面を、読み込んでいる VRM と同じフォルダで開く。
 ## save_ext を渡すと (書き出し)、ファイル名の初期値を「VRM の名前.拡張子」にする。
+## 「最近の設定」の一覧を作り直す。先頭は見出し、最後に「履歴を消す」。
+func _refresh_recent_settings() -> void:
+	if _recent_cfg_btn == null:
+		return
+	_recent_cfg_paths = controller.get_recent_settings_paths() if controller != null else ([] as Array[String])
+	_recent_cfg_btn.clear()
+	_recent_cfg_btn.add_item("最近の設定…")
+	_recent_cfg_btn.set_item_disabled(0, true)
+	if _recent_cfg_paths.is_empty():
+		_recent_cfg_btn.add_item("(まだありません)")
+		_recent_cfg_btn.set_item_disabled(1, true)
+	else:
+		for p in _recent_cfg_paths:
+			_recent_cfg_btn.add_item("%s   — %s" % [p.get_file().get_basename(), p.get_base_dir()])
+			_recent_cfg_btn.set_item_tooltip(_recent_cfg_btn.item_count - 1, p)
+		_recent_cfg_btn.add_separator()
+		_recent_cfg_btn.add_item("履歴を消す")
+	_recent_cfg_btn.select(0)
+
+
+func _on_recent_settings_selected(idx: int) -> void:
+	if controller == null:
+		return
+	var i := idx - 1
+	if i >= 0 and i < _recent_cfg_paths.size():
+		var p: String = _recent_cfg_paths[i]
+		var r: Dictionary = controller.import_settings(p)
+		show_snackbar(("設定を読み込みました: " + p.get_file()) if r.get("ok", false) else "読み込みに失敗しました: " + str(r.get("error", "")), "", Callable(), 5.0)
+	elif _recent_cfg_btn.get_item_text(idx) == "履歴を消す":
+		controller.clear_recent_settings_paths()
+		show_snackbar("最近の設定の履歴を消しました", "", Callable(), 2.5)
+	_refresh_recent_settings()
+
+
 func _popup_at_vrm_dir(dlg: FileDialog, save_ext: String = "") -> void:
 	var vrm_path := ""
 	if controller != null and controller.current_vrm != null:

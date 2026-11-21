@@ -46,6 +46,9 @@ var vrma_player
 var motion
 var procedural_idle
 var recent_vrm_paths: Array[String] = []
+## 書き出した・読み込んだ設定ファイル (.umset) の場所。新しい順。
+var recent_settings_paths: Array[String] = []
+const RECENT_SETTINGS_MAX := 10
 var ws_port: int = 19100
 var osc_port: int = 39539
 var _last_animation: String = "idle"
@@ -847,12 +850,49 @@ func export_settings(path: String) -> Dictionary:
 		path += ".umset"
 	var d := build_config_dict()
 	d["kind"] = SETTINGS_FILE_KIND
+	d.erase("recent_settings_paths")  # 履歴はこの PC だけのもの
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return {"ok": false, "error": error_string(FileAccess.get_open_error())}
 	f.store_string(JSON.stringify(d, "	"))
 	f.close()
+	_remember_settings_path(path)
 	return {"ok": true, "path": path}
+
+
+## 最近書き出した・読み込んだ設定ファイルのうち、今もあるもの (新しい順)。
+func get_recent_settings_paths() -> Array[String]:
+	var out: Array[String] = []
+	for p in recent_settings_paths:
+		if FileAccess.file_exists(p):
+			out.append(p)
+	return out
+
+
+func clear_recent_settings_paths() -> void:
+	recent_settings_paths.clear()
+	_persist_recent_settings()
+
+
+func _norm_settings_path(path: String) -> String:
+	return path.replace("\\", "/").simplify_path()
+
+
+func _remember_settings_path(path: String) -> void:
+	var p := _norm_settings_path(path)
+	recent_settings_paths.erase(p)
+	recent_settings_paths.push_front(p)
+	if recent_settings_paths.size() > RECENT_SETTINGS_MAX:
+		recent_settings_paths.resize(RECENT_SETTINGS_MAX)
+	_persist_recent_settings()
+
+
+## 履歴だけをいつもの設定ファイルに書き足す (ほかの設定は保存しない)。
+func _persist_recent_settings() -> void:
+	var res: Dictionary = ConfigManagerScript.load_config()
+	var cfg: Dictionary = res.get("config", {}) if res.get("ok", false) else {}
+	cfg["recent_settings_paths"] = recent_settings_paths.duplicate()
+	ConfigManagerScript.save_config(cfg)
 
 
 ## 書き出した設定ファイル (または保存先の設定ファイルそのもの) を読み込んで反映する。
@@ -869,8 +909,13 @@ func import_settings(path: String) -> Dictionary:
 	# 同じモデルを読み込み直さない
 	if current_vrm != null and str(d.get("last_vrm_path", "")) == current_vrm.model_path:
 		d.erase("last_vrm_path")
+	d.erase("recent_settings_paths")
 	_apply_config_dict(d)
 	_emit_state_changed()
+	recent_settings_paths.erase(_norm_settings_path(path))
+	recent_settings_paths.push_front(_norm_settings_path(path))
+	if recent_settings_paths.size() > RECENT_SETTINGS_MAX:
+		recent_settings_paths.resize(RECENT_SETTINGS_MAX)
 	save_config()
 	return {"ok": true}
 
@@ -899,6 +944,7 @@ func build_config_dict() -> Dictionary:
 		"version": 1,
 		"last_vrm_path": current_vrm.model_path if current_vrm != null else "",
 		"recent_vrm_paths": recent_vrm_paths.duplicate(),
+		"recent_settings_paths": recent_settings_paths.duplicate(),
 		"last_animation": _last_animation,
 		"first_person": _last_first_person,
 		"lookat_mode": _last_lookat_mode,
@@ -956,6 +1002,10 @@ func _apply_config_dict(cfg: Dictionary) -> void:
 		recent_vrm_paths.clear()
 		for p in cfg["recent_vrm_paths"]:
 			recent_vrm_paths.append(str(p))
+	if cfg.has("recent_settings_paths") and typeof(cfg["recent_settings_paths"]) == TYPE_ARRAY:
+		recent_settings_paths.clear()
+		for p in cfg["recent_settings_paths"]:
+			recent_settings_paths.append(str(p))
 	if cfg.has("last_animation"):
 		_last_animation = str(cfg["last_animation"])
 	if cfg.has("first_person"):
