@@ -309,7 +309,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "vrm_start_recording",
-            "description": "Start real-time video recording to MP4 or transparent WebM VP9.",
+            "description": "Start real-time video recording to MP4 or transparent WebM VP9. The recording uses the output viewport, whose background is transparent by default (black in MP4): call vrm_set_output_viewport with background_mode \"match_main\" first to record the main screen's background.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -318,6 +318,20 @@ fn tool_definitions() -> Value {
                     "fps": { "type": "integer", "default": 60 },
                     "width": { "type": "integer" },
                     "height": { "type": "integer" }
+                }
+            }
+        },
+        {
+            "name": "vrm_set_output_viewport",
+            "description": "Configure the output viewport used for recording, Spout and the virtual camera: size and background. background_mode: match_main (same as the main screen), transparent (default), solid (with color), chroma_green, image (with image_path).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" },
+                    "background_mode": { "type": "string", "enum": ["match_main", "transparent", "solid", "chroma_green", "image"] },
+                    "color": { "type": "string" },
+                    "image_path": { "type": "string" }
                 }
             }
         },
@@ -489,6 +503,10 @@ fn handle_tool_call(ws: &str, name: &str, args: Value) -> Result<Value> {
         }
         "vrm_set_model_transform" => {
             let v = call_viewer(ws, "set_model_transform", args)?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_set_output_viewport" => {
+            let v = call_viewer(ws, "set_output_viewport", args)?;
             Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
         }
         "vrm_turn" => {
