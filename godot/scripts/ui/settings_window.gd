@@ -210,6 +210,7 @@ func _ready() -> void:
 				_refresh_tracking_ui(controller.get_full_state())
 			else:
 				_update_tracking_live()
+			_refresh_tracking_install()
 	)
 	add_child(poll)
 
@@ -243,6 +244,8 @@ func bind_controller(ctrl) -> void:
 		controller.model_loaded.connect(_on_model_loaded)
 	_refresh_from_controller()
 	_refresh_recent_settings()
+	if not controller.tracking.installation_finished.is_connected(_on_tracking_installed):
+		controller.tracking.installation_finished.connect(_on_tracking_installed)
 	_refresh_fx_presets()
 
 
@@ -674,6 +677,13 @@ var _trk_warn_lbl: Label
 var _trk_calib_btn: Button
 var _trk_calib_lbl: Label
 var _trk_last_running: bool = false
+## トラッキング用のシステム (uv と Python の環境) が無いときに出すインストールの欄
+var _trk_start_row: HBoxContainer
+var _trk_install_box: VBoxContainer
+var _trk_install_btn: Button
+var _trk_install_lbl: Label
+var _trk_install_dlg: ConfirmationDialog
+var _trk_install_shown := ""
 var _shot_dir_lbl: Label
 
 
@@ -705,6 +715,8 @@ func _build_tab_tracking() -> void:
 	_trk_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	row.add_child(_trk_status_lbl)
 	vb.add_child(row)
+	_trk_start_row = row
+	_build_tracking_install(vb)
 	_trk_live_lbl = Label.new()
 	_trk_live_lbl.theme_type_variation = "ValueLabel"
 	_trk_live_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -933,9 +945,140 @@ const _TRK_MODE_DESC := {
 }
 
 
+func _build_tracking_install(vb: VBoxContainer) -> void:
+	_trk_install_box = VBoxContainer.new()
+	_trk_install_box.add_theme_constant_override("separation", 8)
+	var note := Label.new()
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.text = "トラッキングには「トラッキング用のシステム」(Python と、MediaPipe・OpenCV などのライブラリ) が要ります。まだ入っていないので、先にインストールしてください。インターネットから自動でダウンロードします。"
+	_trk_install_box.add_child(note)
+	var r := HBoxContainer.new()
+	r.add_theme_constant_override("separation", 10)
+	_trk_install_btn = Button.new()
+	_trk_install_btn.theme_type_variation = "AccentButton"
+	_trk_install_btn.text = "⬇ トラッキング用のシステムをインストール"
+	_trk_install_btn.custom_minimum_size = Vector2(0, 36)
+	_trk_install_btn.pressed.connect(_show_tracking_install_dialog)
+	r.add_child(_trk_install_btn)
+	_trk_install_box.add_child(r)
+	_trk_install_lbl = Label.new()
+	_trk_install_lbl.theme_type_variation = "DimLabel"
+	_trk_install_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_trk_install_box.add_child(_trk_install_lbl)
+	vb.add_child(_trk_install_box)
+
+	_trk_install_dlg = ConfirmationDialog.new()
+	_trk_install_dlg.theme = UiThemeScript.get_theme()
+	_trk_install_dlg.title = "トラッキング用のシステムのインストール"
+	_trk_install_dlg.ok_button_text = "インストールする"
+	_trk_install_dlg.cancel_button_text = "やめる"
+	_trk_install_dlg.dialog_autowrap = true
+	_trk_install_dlg.min_size = Vector2i(620, 0)
+	_trk_install_dlg.confirmed.connect(func():
+		if controller == null:
+			return
+		var res: Dictionary = controller.tracking.start_install()
+		if not res.get("ok", false):
+			show_snackbar("インストールを始められませんでした: " + str(res.get("error", "")), "", Callable(), 8.0)
+		_refresh_tracking_install()
+	)
+	add_child(_trk_install_dlg)
+
+
+## インストール前の案内: 入るもの・場所・必要な空き容量・要求スペック
+static func _mb_text(mb: int) -> String:
+	if mb < 0:
+		return "不明"
+	return ("%.1f GB" % (mb / 1024.0)) if mb >= 1024 else ("%d MB" % mb)
+
+
+func tracking_install_message(info: Dictionary) -> Dictionary:
+	var lines: PackedStringArray = []
+	lines.append("トラッキングに必要なものを、インターネットから自動でダウンロードして入れます。回線にもよりますが、数分かかります。")
+	lines.append("")
+	lines.append("■ 入るもの")
+	if not bool(info.get("uv_found", false)):
+		lines.append("・uv (Python の管理ツール) — まだ入っていないので、公式のインストーラー (astral.sh) で入れます。あなたのユーザーの PATH に uv が追加されます。")
+	else:
+		lines.append("・uv はもう入っているので、それを使います (%s)" % str(info.get("uv_path", "")))
+	lines.append("・Python 3.11 と、MediaPipe・OpenCV などのライブラリ (uv が用意します)")
+	lines.append("　入れる場所: %s\\.venv" % str(info.get("tracker_dir", "")))
+	lines.append("")
+	lines.append("■ 必要な空き容量")
+	var app_need: int = int(info.get("app_need_mb", 400))
+	var user_need: int = int(info.get("user_need_mb", 500))
+	var app_free: int = int(info.get("app_free_mb", -1))
+	var user_free: int = int(info.get("user_free_mb", -1))
+	var enough := true
+	if bool(info.get("same_drive", false)):
+		var need := app_need + user_need
+		lines.append("・%s ドライブに約 %s (アプリのフォルダに約 %s、ユーザーのフォルダに Python とダウンロードのキャッシュで約 %s) — 今の空き: %s" % [
+			info.get("app_drive", ""), _mb_text(need), _mb_text(app_need), _mb_text(user_need), _mb_text(app_free)])
+		enough = app_free < 0 or app_free >= need
+	else:
+		lines.append("・%s ドライブ (アプリのフォルダ): 約 %s — 今の空き: %s" % [info.get("app_drive", ""), _mb_text(app_need), _mb_text(app_free)])
+		lines.append("・%s ドライブ (ユーザーのフォルダ。Python とダウンロードのキャッシュ): 約 %s — 今の空き: %s" % [info.get("user_drive", ""), _mb_text(user_need), _mb_text(user_free)])
+		enough = (app_free < 0 or app_free >= app_need) and (user_free < 0 or user_free >= user_need)
+	if not enough:
+		lines.append("※ 空き容量が足りません。空きを増やしてから、もう一度押してください。")
+	lines.append("")
+	lines.append("■ 要求スペック (トラッキングを使うとき)")
+	lines.append("・CPU: 4 コア以上の x64 CPU (おすすめ 6 コア以上)")
+	lines.append("・メモリ: 4 GB 以上 (おすすめ 8 GB 以上)")
+	lines.append("・Web カメラ: 720p・30fps 以上がおすすめ")
+	lines.append("・インターネット接続 (インストールのときだけ)")
+	return {"text": "\n".join(lines), "enough": enough}
+
+
+func _show_tracking_install_dialog() -> void:
+	if controller == null:
+		return
+	var info: Dictionary = controller.tracking.install_info()
+	if not bool(info.get("script_found", true)):
+		show_snackbar("インストール用のファイル (tracker\\install_tracker.ps1) が見つかりません。アプリを入れ直してください。", "", Callable(), 8.0)
+		return
+	var m := tracking_install_message(info)
+	_trk_install_dlg.dialog_text = str(m.text)
+	_trk_install_dlg.get_ok_button().disabled = not bool(m.enough)
+	_trk_install_dlg.popup_centered()
+
+
+## インストールの欄の表示を、今の状態に合わせる (0.25 秒ごとにも呼ぶ)
+func _refresh_tracking_install() -> void:
+	if _trk_install_box == null or controller == null:
+		return
+	var tm = controller.tracking
+	var installed: bool = tm.is_installed()
+	var installing: bool = tm.is_installing()
+	var step: String = tm.install_step
+	var key := "%s|%s|%s|%s" % [installed, installing, step, tm.install_last_line]
+	if key == _trk_install_shown:
+		return
+	_trk_install_shown = key
+	_trk_install_box.visible = not installed or installing
+	_trk_start_row.visible = installed and not installing
+	_trk_install_btn.disabled = installing
+	_trk_install_btn.text = "インストール中…" if installing else ("⬇ もう一度インストールする" if step == "error" else "⬇ トラッキング用のシステムをインストール")
+	var msg := ""
+	match step:
+		"starting":
+			msg = "準備しています…"
+		"uv":
+			msg = "uv を入れています…"
+		"sync":
+			msg = "Python とライブラリをダウンロードしています… (数分かかります)"
+		"error":
+			msg = "インストールできませんでした: %s\n記録: %s" % [tm.install_error, tm.install_log_path()]
+	if installing and str(tm.install_last_line) != "":
+		msg += "\n" + str(tm.install_last_line).left(160)
+	_trk_install_lbl.text = msg
+	_trk_install_lbl.visible = msg != ""
+
+
 func _refresh_tracking_ui(st: Dictionary) -> void:
 	if _trk_start_btn == null:
 		return
+	_refresh_tracking_install()
 	var trk: Dictionary = st.get("tracking", {})
 	var running: bool = bool(trk.get("running", false))
 	_trk_start_btn.text = "■ トラッキング停止" if running else "▶ トラッキング開始"
@@ -1309,6 +1452,16 @@ func _on_recent_settings_selected(idx: int) -> void:
 		controller.clear_recent_settings_paths()
 		show_snackbar("最近の設定の履歴を消しました", "", Callable(), 2.5)
 	_refresh_recent_settings()
+
+
+func _on_tracking_installed(ok: bool) -> void:
+	_trk_install_shown = ""
+	if controller != null:
+		_refresh_tracking_ui(controller.get_full_state())
+	if ok:
+		show_snackbar("トラッキング用のシステムを入れました。「▶ トラッキング開始」で始められます。", "", Callable(), 8.0)
+	else:
+		show_snackbar("トラッキング用のシステムを入れられませんでした。トラッキングのページに理由を出しています。", "", Callable(), 8.0)
 
 
 func _popup_at_vrm_dir(dlg: FileDialog, save_ext: String = "") -> void:

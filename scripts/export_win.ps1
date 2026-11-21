@@ -105,7 +105,7 @@ try {
     $dstTracker = Join-Path $absOutDir "tracker"
     New-Item -ItemType Directory -Force -Path $dstTracker | Out-Null
     Copy-Item (Join-Path $srcTracker "vrm_tracker.py") $dstTracker -Force
-    foreach ($f in @("pyproject.toml", "uv.lock", ".python-version")) {
+    foreach ($f in @("pyproject.toml", "uv.lock", ".python-version", "install_tracker.ps1")) {
         Copy-Item (Join-Path $srcTracker $f) $dstTracker -Force
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $dstTracker "vrmtrack") | Out-Null

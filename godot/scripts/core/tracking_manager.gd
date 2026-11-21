@@ -9,6 +9,9 @@ extends RefCounted
 ##  - 動作中に変えられるもの (LIVE_KEYS) … 制御ポート (UDP JSON) で即時反映
 ## キャリブレーション結果はトラッカーが設定ファイルと同じフォルダの JSON に保存する。
 
+## インストールが終わった (ok = 成功)
+signal installation_finished(ok: bool)
+
 const ConfigManagerScript := preload("res://scripts/core/config_manager.gd")
 
 const DEFAULTS := {
@@ -84,8 +87,24 @@ var _udp_ready := false
 var _next_poll_msec := 0
 var _last_status_msec := 0
 
+# ---- トラッキング用のシステム (uv と tracker\.venv) のインストール
+## 使う容量の目安 (MB): アプリのフォルダ (.venv) と、ユーザーのフォルダ (uv の Python とダウンロードのキャッシュ)
+const INSTALL_APP_MB := 400
+const INSTALL_USER_MB := 500
+const INSTALL_SCRIPT := "install_tracker.ps1"
+var install_step := ""  # "" | "starting" | "uv" | "sync" | "done" | "error"
+var install_error := ""
+var install_last_line := ""
+var _inst_pid := -1
+var _inst_log := ""
+var _inst_pos := 0
+var _inst_partial := ""
+
 
 func _tracker_dir() -> String:
+	var env_dir := OS.get_environment("VRMVIEWER_TRACKER_DIR")  # テスト用
+	if env_dir != "":
+		return env_dir.replace("\\", "/")
 	return ConfigManagerScript.get_app_root_dir().path_join("tracker")
 
 
@@ -118,6 +137,146 @@ func script_path() -> String:
 	return _tracker_dir().path_join("vrm_tracker.py")
 
 
+## トラッキング用のシステム (Python の環境) が入っているか
+func is_installed() -> bool:
+	if OS.get_environment("VRMVIEWER_PYTHON") != "":
+		return true
+	var d := _tracker_dir()
+	for rel in [".venv/Scripts/python.exe", ".venv/bin/python3", ".venv/bin/python"]:
+		if FileAccess.file_exists(d.path_join(rel)):
+			return true
+	return false
+
+
+## uv の場所 (見つからなければ "")
+func find_uv() -> String:
+	var out: Array = []
+	if OS.get_name() == "Windows" and OS.execute("where.exe", PackedStringArray(["uv"]), out, true) == 0 and not out.is_empty():
+		var first := str(out[0]).strip_edges().split("\n")[0].strip_edges()
+		if first != "" and FileAccess.file_exists(first):
+			return first
+	var home := OS.get_environment("USERPROFILE")
+	var local := OS.get_environment("LOCALAPPDATA")
+	for p in [home.path_join(".local/bin/uv.exe"), local.path_join("Microsoft/WinGet/Links/uv.exe"), home.path_join(".cargo/bin/uv.exe")]:
+		if home != "" and FileAccess.file_exists(p):
+			return p
+	return ""
+
+
+static func _free_mb(path: String) -> int:
+	var da := DirAccess.open(path)
+	if da == null:
+		return -1
+	return int(da.get_space_left() / (1024 * 1024))
+
+
+## インストール前の案内に出す情報
+func install_info() -> Dictionary:
+	var tdir := _tracker_dir()
+	var home := OS.get_environment("USERPROFILE")
+	var app_drive := tdir.substr(0, 2).to_upper()
+	var user_drive := home.substr(0, 2).to_upper() if home != "" else app_drive
+	var uv := find_uv()
+	return {
+		"tracker_dir": tdir.replace("/", "\\"),
+		"script_found": FileAccess.file_exists(tdir.path_join(INSTALL_SCRIPT)),
+		"uv_found": uv != "",
+		"uv_path": uv,
+		"app_drive": app_drive,
+		"user_drive": user_drive,
+		"same_drive": app_drive == user_drive,
+		"app_free_mb": _free_mb(tdir),
+		"user_free_mb": _free_mb(home) if home != "" else -1,
+		"app_need_mb": INSTALL_APP_MB,
+		"user_need_mb": INSTALL_USER_MB,
+	}
+
+
+func is_installing() -> bool:
+	return _inst_pid > 0 and OS.is_process_running(_inst_pid)
+
+
+func install_log_path() -> String:
+	return _inst_log
+
+
+## uv が無ければ uv を入れ、tracker フォルダで uv sync する (別のプロセスで動かし、poll() で進み具合を読む)
+func start_install() -> Dictionary:
+	if is_installing():
+		return {"ok": true}
+	if OS.get_name() != "Windows":
+		return {"ok": false, "error": "自動のインストールは Windows だけです。README の手順で uv sync してください。"}
+	var script := _tracker_dir().path_join(INSTALL_SCRIPT)
+	if not FileAccess.file_exists(script):
+		install_step = "error"
+		install_error = "インストール用のファイルがありません: " + script
+		return {"ok": false, "error": install_error}
+	DirAccess.make_dir_recursive_absolute(_data_dir())
+	_inst_log = _data_dir().path_join("tracker_install.log")
+	var f := FileAccess.open(_inst_log, FileAccess.WRITE)
+	if f != null:
+		f.close()
+	_inst_pos = 0
+	_inst_partial = ""
+	install_error = ""
+	install_last_line = ""
+	_inst_pid = OS.create_process("powershell.exe", PackedStringArray(["-NoProfile", "-ExecutionPolicy", "Bypass",
+		"-File", script.replace("/", "\\"), "-Log", _inst_log.replace("/", "\\")]), false)
+	if _inst_pid <= 0:
+		install_step = "error"
+		install_error = "PowerShell を起動できませんでした"
+		return {"ok": false, "error": install_error}
+	install_step = "starting"
+	return {"ok": true}
+
+
+## インストールの進み具合をログから読む。終わった (成功・失敗) ときに true
+func _poll_install() -> bool:
+	var f := FileAccess.open(_inst_log, FileAccess.READ)
+	if f != null:
+		var n := f.get_length()
+		if n > _inst_pos:
+			f.seek(_inst_pos)
+			var text := _inst_partial + f.get_buffer(n - _inst_pos).get_string_from_utf8()
+			_inst_pos = n
+			var lines := text.split("\n")
+			_inst_partial = lines[lines.size() - 1]
+			for i in lines.size() - 1:
+				_on_install_line(lines[i].strip_edges())
+		f.close()
+	if install_step in ["done", "error"]:
+		_inst_pid = -1
+		return true
+	if not is_installing():
+		_inst_pid = -1
+		if _inst_partial.strip_edges() != "":
+			_on_install_line(_inst_partial.strip_edges())
+			_inst_partial = ""
+		if install_step != "done" and install_step != "error":
+			install_step = "error"
+			install_error = "インストールが途中で終わりました"
+		return true
+	return false
+
+
+func _on_install_line(line: String) -> void:
+	if line == "":
+		return
+	if line.begins_with("@@STEP "):
+		install_step = line.substr(7).strip_edges()
+	elif line == "@@DONE":
+		install_step = "done" if is_installed() else "error"
+		if install_step == "error":
+			install_error = "Python の環境ができていません"
+	elif line.begins_with("@@ERROR "):
+		install_step = "error"
+		install_error = line.substr(8)
+	elif line.begins_with("@@UV "):
+		pass
+	else:
+		install_last_line = line
+
+
 func is_running() -> bool:
 	return _pid > 0 and OS.is_process_running(_pid)
 
@@ -148,6 +307,9 @@ func _write_settings_file() -> void:
 func start(osc_port: int) -> Dictionary:
 	if is_running():
 		return {"ok": true, "pid": _pid}
+	if not is_installed():
+		last_error = "トラッキング用のシステムが入っていません。設定画面の「トラッキング」ページからインストールしてください。"
+		return {"ok": false, "error": last_error, "not_installed": true}
 	if not FileAccess.file_exists(script_path()):
 		last_error = "トラッカーが見つかりません: " + script_path()
 		return {"ok": false, "error": last_error}
@@ -299,6 +461,10 @@ func _send(obj: Dictionary) -> void:
 
 ## 毎フレーム呼ぶ。動作中は 0.25 秒ごとに状態を問い合わせる。
 func poll() -> void:
+	if _inst_pid > 0 and _poll_install():
+		if install_step == "done" and last_error.contains("インストール"):
+			last_error = ""
+		installation_finished.emit(install_step == "done")
 	if not is_running():
 		if _pid > 0:
 			_pid = -1
@@ -326,4 +492,6 @@ func to_dict() -> Dictionary:
 		"error": last_error,
 		"status": status.duplicate(),
 		"calibrated_at": calibration_time(),
+		"installed": is_installed(),
+		"install": {"step": install_step, "running": is_installing(), "error": install_error, "last_line": install_last_line},
 	}
