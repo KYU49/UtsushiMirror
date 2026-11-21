@@ -168,6 +168,8 @@ class VrmaPlayer:
 	var speed: float = 1.0
 	var paused: bool = false
 	var playing: bool = false
+	## true のあいだは、クリップの腰の前後左右の移動を使わない (歩く命令で体ごと動かすとき、二重に進まないように)
+	var strip_root_xz: bool = false
 
 	# Crossfade state
 	var _prev_pose: Dictionary = {}
@@ -243,6 +245,9 @@ class VrmaPlayer:
 
 		var dst_y: float = humanoid.hips_rest_height if humanoid != null else 0.9
 		var pose := current_clip.evaluate(time_sec, dst_y)
+		if strip_root_xz:
+			var hd: Vector3 = pose.get("hips_delta", Vector3.ZERO)
+			pose["hips_delta"] = Vector3(0.0, hd.y, 0.0)
 
 		if not _prev_pose.is_empty() and _blend_duration > 0.001:
 			_blend_elapsed += dt

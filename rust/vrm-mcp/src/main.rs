@@ -146,7 +146,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "vrm_play_animation",
-            "description": "Play a loaded or bundled .vrma animation (t_pose, a_pose, idle, walk, run, sit, stretch_neck, stretch_shoulder, stretch_side, stretch_squat, finger_test, spring_bounce).",
+            "description": "Play a loaded animation by name. Includes bundled .vrma clips (idle, walk, run, sit, Walk_Loop, Idle_Loop, Dance_Loop, ...) and every .vrma / .npz (SMPL motion) placed in the presets folder. Call vrm_get_state and read available_animations for the full list.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -324,6 +324,55 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "vrm_talk",
+            "description": "Move the mouth naturally as if speaking. Give the sentence in `text` (Japanese kana are mapped to the matching mouth shapes; kanji and English get plausible shapes) and/or a length in `duration_sec`. Returns the duration in seconds. Does not play audio.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Sentence to speak." },
+                    "duration_sec": { "type": "number", "description": "Length in seconds. With text, the speech is stretched to fit; without text, random natural mouth movement." },
+                    "speed": { "type": "number", "default": 7.5, "description": "Morae (syllables) per second." },
+                    "intensity": { "type": "number", "default": 0.8, "description": "How wide the mouth opens, 0-1." }
+                }
+            }
+        },
+        {
+            "name": "vrm_stop_talk",
+            "description": "Stop the mouth movement started by vrm_talk and close the mouth.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "vrm_walk",
+            "description": "Walk naturally: turn toward the direction, play a walk animation while moving the whole character, then stop (and by default turn to face the camera). Returns the distance and the expected duration in seconds.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "direction": { "type": "string", "enum": ["forward", "backward", "left", "right"], "default": "forward" },
+                    "angle_deg": { "type": "number", "description": "Instead of direction: 0 = forward, 90 = right, -90 = left, 180 = backward." },
+                    "relative_to": { "type": "string", "enum": ["character", "screen"], "default": "character", "description": "character: directions as seen by the character. screen: as seen on screen (forward = toward the camera)." },
+                    "distance": { "type": "number", "default": 1.0, "description": "Meters." },
+                    "target": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, z] world position to walk to (overrides direction and distance)." },
+                    "speed": { "type": "number", "default": 0.8, "description": "Meters per second." },
+                    "animation": { "type": "string", "description": "Walk animation name (default: Walk_Loop or walk). Use e.g. Jog_Fwd_Loop or run to jog." },
+                    "face_camera_after": { "type": "boolean", "default": true }
+                }
+            }
+        },
+        {
+            "name": "vrm_stop_walk",
+            "description": "Stop walking where the character is now.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "vrm_apply_shader_preset",
+            "description": "Apply a shader preset (.umshader file in the presets folder) by name. vrm_get_state lists them in shader_presets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            }
+        },
+        {
             "name": "vrm_save_config",
             "description": "Save current viewer configuration to persistent JSON config.",
             "inputSchema": {
@@ -441,6 +490,26 @@ fn handle_tool_call(ws: &str, name: &str, args: Value) -> Result<Value> {
         }
         "vrm_set_vcam" => {
             let v = call_viewer(ws, "set_vcam", args)?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_talk" => {
+            let v = call_viewer(ws, "talk", args)?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_stop_talk" => {
+            let v = call_viewer(ws, "stop_talk", json!({}))?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_walk" => {
+            let v = call_viewer(ws, "walk", args)?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_stop_walk" => {
+            let v = call_viewer(ws, "stop_walk", json!({}))?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_apply_shader_preset" => {
+            let v = call_viewer(ws, "apply_shader_preset", args)?;
             Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
         }
         "vrm_save_config" => {

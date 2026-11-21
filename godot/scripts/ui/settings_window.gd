@@ -122,6 +122,8 @@ var _available_human_bones: Array[String] = []
 
 # Tab 5: Anim
 var _anim_list: ItemList
+var _fx_preset_flow: HFlowContainer
+var _fx_preset_name: LineEdit
 var _anim_scrub: HSlider
 var _anim_time_lbl: Label
 var _scrub_dragging: bool = false
@@ -237,6 +239,7 @@ func bind_controller(ctrl) -> void:
 	if not controller.model_loaded.is_connected(_on_model_loaded):
 		controller.model_loaded.connect(_on_model_loaded)
 	_refresh_from_controller()
+	_refresh_fx_presets()
 
 
 const NAV_ITEMS := [
@@ -1174,6 +1177,49 @@ func _build_tab_effects() -> void:
 	sharp_row.add_child(b_sharp_reset)
 	vb.add_child(sharp_row)
 
+	# ---- 保存したプリセット (プリセットのフォルダの .umshader)
+	_add_section(vb, "保存したプリセット")
+	_trk_dim_note(vb, "プリセットのフォルダに入れた .umshader (シェーダー設定の書き出しファイル) が、ここにボタンで並びます。押すとその設定になります。")
+	_fx_preset_flow = HFlowContainer.new()
+	_fx_preset_flow.add_theme_constant_override("h_separation", 6)
+	_fx_preset_flow.add_theme_constant_override("v_separation", 6)
+	vb.add_child(_fx_preset_flow)
+	var save_row := HBoxContainer.new()
+	save_row.add_theme_constant_override("separation", 8)
+	_fx_preset_name = LineEdit.new()
+	_fx_preset_name.placeholder_text = "プリセットの名前"
+	_fx_preset_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	save_row.add_child(_fx_preset_name)
+	var b_preset_save := Button.new()
+	b_preset_save.text = "今の設定をプリセットに保存"
+	b_preset_save.pressed.connect(func():
+		if controller == null:
+			return
+		var r: Dictionary = controller.save_shader_preset(_fx_preset_name.text)
+		if r.get("ok", false):
+			show_snackbar("プリセット「%s」を保存しました" % _fx_preset_name.text.strip_edges(), "", Callable(), 3.0)
+			_fx_preset_name.text = ""
+			_refresh_fx_presets()
+		else:
+			show_snackbar("保存できませんでした: " + str(r.get("error", "")), "", Callable(), 4.0)
+	)
+	save_row.add_child(b_preset_save)
+	vb.add_child(save_row)
+	var pdir_row := HBoxContainer.new()
+	pdir_row.add_theme_constant_override("separation", 8)
+	var b_fx_dir := Button.new()
+	b_fx_dir.text = "プリセットのフォルダを開く"
+	b_fx_dir.pressed.connect(func():
+		if controller != null:
+			controller.open_presets_folder("shaders")
+	)
+	pdir_row.add_child(b_fx_dir)
+	var b_fx_reload := Button.new()
+	b_fx_reload.text = "フォルダを読み直す"
+	b_fx_reload.pressed.connect(func(): _refresh_fx_presets())
+	pdir_row.add_child(b_fx_reload)
+	vb.add_child(pdir_row)
+
 	# ---- シェーダーの設定だけをファイルに書き出す・読み込む
 	_add_section(vb, "シェーダー設定の書き出し・読み込み")
 	_trk_dim_note(vb, "このページの設定 (画面効果・モデルの陰影・落ち影) だけを 1 つのファイルに保存し、あとで読み込めます。ほかの設定は変わりません。")
@@ -1228,6 +1274,32 @@ func _popup_at_vrm_dir(dlg: FileDialog, save_ext: String = "") -> void:
 		if save_ext != "":
 			dlg.current_file = vrm_path.get_file().get_basename() + "." + save_ext
 	dlg.popup_centered_ratio(0.6)
+
+
+## プリセットのフォルダのシェーダー設定を、ボタンとして並べ直す
+func _refresh_fx_presets() -> void:
+	if _fx_preset_flow == null or controller == null:
+		return
+	for c in _fx_preset_flow.get_children():
+		c.queue_free()
+	var presets: Array = controller.list_shader_presets()
+	if presets.is_empty():
+		var l := Label.new()
+		l.text = "(まだありません)"
+		l.theme_type_variation = "DimLabel"
+		_fx_preset_flow.add_child(l)
+		return
+	for pr in presets:
+		var b := Button.new()
+		b.text = str(pr.name)
+		b.tooltip_text = str(pr.path)
+		var nm: String = str(pr.name)
+		b.pressed.connect(func():
+			var r: Dictionary = controller.apply_shader_preset(nm)
+			if not r.get("ok", false):
+				show_snackbar("読み込めませんでした: " + str(r.get("error", "")), "", Callable(), 4.0)
+		)
+		_fx_preset_flow.add_child(b)
 
 
 func _labeled_row(vb: VBoxContainer, label_text: String) -> HBoxContainer:
@@ -1804,13 +1876,33 @@ func _build_tab_animation() -> void:
 	row.add_child(b_stop)
 
 	var b_load := Button.new()
-	b_load.text = "外部 .vrma 読込..."
+	b_load.text = "外部 .vrma / .npz 読込..."
 	b_load.pressed.connect(func():
 		if controller != null:
 			controller.open_vrma_file_dialog()
 	)
 	row.add_child(b_load)
 	vb.add_child(row)
+
+	var prow := HFlowContainer.new()
+	var b_anim_dir := Button.new()
+	b_anim_dir.text = "プリセットのフォルダを開く"
+	b_anim_dir.tooltip_text = "ここに .vrma や .npz (SMPL 系のモーション) を入れると、上の一覧に出ます。"
+	b_anim_dir.pressed.connect(func():
+		if controller != null:
+			controller.open_presets_folder("animations")
+	)
+	prow.add_child(b_anim_dir)
+	var b_anim_reload := Button.new()
+	b_anim_reload.text = "フォルダを読み直す"
+	b_anim_reload.pressed.connect(func():
+		if controller != null:
+			var n: int = controller.reload_animation_presets()
+			show_snackbar("プリセットのアニメーションを %d 個読み込みました" % n, "", Callable(), 3.0)
+	)
+	prow.add_child(b_anim_reload)
+	vb.add_child(prow)
+	_trk_dim_note(vb, "プリセットのフォルダに入れた .vrma と .npz (AMASS などの SMPL / SMPL-H / SMPL-X のモーション) は、起動時と「フォルダを読み直す」で一覧に加わります。")
 
 	var hb_sc := HBoxContainer.new()
 	var ls := Label.new()
@@ -2442,7 +2534,13 @@ func _refresh_from_controller() -> void:
 
 	# Animations list
 	var anims: Array = st.get("available_animations", [])
-	if _anim_list.item_count != anims.size():
+	var cur_names := []
+	for i in _anim_list.item_count:
+		cur_names.append(_anim_list.get_item_text(i))
+	var new_names := []
+	for a in anims:
+		new_names.append(str(a))
+	if cur_names != new_names:
 		_anim_list.clear()
 		for a in anims:
 			_anim_list.add_item(str(a))

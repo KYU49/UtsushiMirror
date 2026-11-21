@@ -9,6 +9,8 @@ signal model_loaded(info: Dictionary)
 
 const VrmLoaderScript := preload("res://scripts/vrm/vrm_loader.gd")
 const VrmaLoaderScript := preload("res://scripts/vrm/vrma_loader.gd")
+const NpzMotionLoaderScript := preload("res://scripts/vrm/npz_motion_loader.gd")
+const MotionDirectorScript := preload("res://scripts/core/motion_director.gd")
 const ProceduralIdleScript := preload("res://scripts/core/procedural_idle.gd")
 const TrackingManagerScript := preload("res://scripts/core/tracking_manager.gd")
 const PostEffectsScript := preload("res://scripts/core/post_effects.gd")
@@ -40,6 +42,8 @@ const UiThemeScript := preload("res://scripts/ui/ui_theme.gd")
 
 var current_vrm = null
 var vrma_player
+## 外部からの「しゃべる」「歩く」
+var motion
 var procedural_idle
 var recent_vrm_paths: Array[String] = []
 var ws_port: int = 19100
@@ -91,8 +95,10 @@ func _ready() -> void:
 		output_viewport.world_3d = get_viewport().world_3d
 
 	vrma_player = VrmaLoaderScript.VrmaPlayer.new()
+	motion = MotionDirectorScript.new(self)
 	procedural_idle = ProceduralIdleScript.new()
 	_preload_bundled_animations()
+	reload_animation_presets()
 
 	camera_rig.setup(main_camera, output_camera)
 	lighting_rig.setup(key_light, fill_light, rim_light, world_env)
@@ -185,7 +191,7 @@ func _on_files_dropped(files: PackedStringArray) -> void:
 		var lower: String = path.to_lower()
 		if lower.ends_with(".vrm"):
 			load_vrm(path)
-		elif lower.ends_with(".vrma"):
+		elif lower.ends_with(".vrma") or lower.ends_with(".npz"):
 			load_vrma_file(path, "", true)
 
 
@@ -204,6 +210,7 @@ func _process(delta: float) -> void:
 
 	if current_vrm != null:
 		current_vrm.lookat_world_target = camera_rig.get_camera_world_position()
+	motion.process(delta)
 
 	capture_manager.process_frame(delta)
 
@@ -235,6 +242,80 @@ func _preload_bundled_animations() -> void:
 	print("Preloaded %d bundled animations from %s" % [vrma_player.get_clip_names().size(), anim_dir])
 
 
+# ---------------------------------------------------------------------------
+# プリセットのフォルダ (ここに入れた .vrma / .npz / .umshader が一覧に出る)
+# ---------------------------------------------------------------------------
+
+## kind: "animations" | "shaders"。無ければ作る。
+## 既定は %APPDATA%/UtsushiMirror/presets/<kind> (アプリを更新しても消えない)。VRMVIEWER_PRESETS_DIR で変えられる。
+func presets_dir(kind: String) -> String:
+	var base := OS.get_environment("VRMVIEWER_PRESETS_DIR")
+	if base == "":
+		base = ProjectSettings.globalize_path("user://presets")
+	var d := base.path_join(kind)
+	if not DirAccess.dir_exists_absolute(d):
+		DirAccess.make_dir_recursive_absolute(d)
+	return d
+
+
+func open_presets_folder(kind: String) -> void:
+	OS.shell_open(presets_dir(kind))
+
+
+var _preset_clip_names: Array[String] = []
+
+
+## プリセットのフォルダのアニメーション (.vrma / .npz) を読み直す。読み込んだ数を返す。
+func reload_animation_presets() -> int:
+	for nm in _preset_clip_names:
+		if vrma_player.current_name != nm:
+			vrma_player.clips.erase(nm)
+	_preset_clip_names.clear()
+	var d := presets_dir("animations")
+	var files := Array(DirAccess.get_files_at(d))
+	files.sort()
+	for fn in files:
+		var low := str(fn).to_lower()
+		if not (low.ends_with(".vrma") or low.ends_with(".npz")):
+			continue
+		var r := _load_motion_clip(d.path_join(fn), "")
+		if r.get("ok", false):
+			vrma_player.add_clip(r["clip"].name, r["clip"])
+			_preset_clip_names.append(r["clip"].name)
+		else:
+			push_warning("プリセットのアニメーションを読めません: %s (%s)" % [fn, r.get("error", "")])
+	_emit_state_changed()
+	return _preset_clip_names.size()
+
+
+## プリセットのフォルダにあるシェーダー設定の一覧 [{name, path}]
+func list_shader_presets() -> Array:
+	var out := []
+	var d := presets_dir("shaders")
+	var files := Array(DirAccess.get_files_at(d))
+	files.sort()
+	for fn in files:
+		var low := str(fn).to_lower()
+		if low.ends_with(".umshader") or low.ends_with(".json"):
+			out.append({"name": str(fn).get_basename(), "path": d.path_join(fn)})
+	return out
+
+
+## 今のシェーダー設定を、プリセットのフォルダに「名前.umshader」で保存する
+func save_shader_preset(preset_name: String) -> Dictionary:
+	var nm := preset_name.strip_edges().validate_filename()
+	if nm == "":
+		return {"ok": false, "error": "名前を入れてください"}
+	return export_effects(presets_dir("shaders").path_join(nm + ".umshader"))
+
+
+func apply_shader_preset(preset_name: String) -> Dictionary:
+	for p in list_shader_presets():
+		if p.name == preset_name:
+			return import_effects(p.path)
+	return {"ok": false, "error": "プリセットがありません: " + preset_name}
+
+
 func _poll_rpc() -> void:
 	var reqs: PackedStringArray = bridge.poll_rpc_requests()
 	for line in reqs:
@@ -252,6 +333,34 @@ func _dispatch_rpc(client_id: int, id_json: String, method: String, params: Dict
 	match method:
 		"ping":
 			_reply_ok(client_id, id_json, {"pong": true, "ws_port": ws_port, "osc_port": osc_port})
+		"talk":
+			var tres: Dictionary = motion.start_talk(params)
+			if tres.get("ok", false):
+				_reply_ok(client_id, id_json, tres)
+			else:
+				_reply_err(client_id, id_json, -32602, str(tres.get("error", "talk failed")))
+		"stop_talk":
+			motion.stop_talk()
+			_reply_ok(client_id, id_json, motion.state())
+		"walk":
+			var wres: Dictionary = motion.start_walk(params)
+			if wres.get("ok", false):
+				_reply_ok(client_id, id_json, wres)
+			else:
+				_reply_err(client_id, id_json, -32602, str(wres.get("error", "walk failed")))
+		"stop_walk":
+			motion.stop_walk()
+			_reply_ok(client_id, id_json, motion.state())
+		"get_motion_state":
+			_reply_ok(client_id, id_json, motion.state())
+		"reload_presets":
+			_reply_ok(client_id, id_json, {"animations": reload_animation_presets(), "shaders": list_shader_presets()})
+		"apply_shader_preset":
+			var spr: Dictionary = apply_shader_preset(str(params.get("name", "")))
+			if spr.get("ok", false):
+				_reply_ok(client_id, id_json, spr)
+			else:
+				_reply_err(client_id, id_json, -32602, str(spr.get("error", "")))
 		"get_state":
 			_reply_ok(client_id, id_json, get_full_state())
 		"tracking.start":
@@ -589,9 +698,16 @@ func unload_vrm(restore_window_if_empty: bool = true) -> void:
 	_emit_state_changed()
 
 
+## .vrma と .npz (SMPL 系のモーション) のどちらも、同じアニメーションのクリップとして読む
+func _load_motion_clip(path: String, clip_name: String) -> Dictionary:
+	if path.to_lower().ends_with(".npz"):
+		return NpzMotionLoaderScript.load_npz(path, clip_name)
+	return VrmaLoaderScript.load_vrma(path, bridge, clip_name)
+
+
 func load_vrma_file(path: String, clip_name: String = "", auto_play: bool = false) -> Dictionary:
 	path = _resolve_input_path(path)
-	var res: Dictionary = VrmaLoaderScript.load_vrma(path, bridge, clip_name)
+	var res: Dictionary = _load_motion_clip(path, clip_name)
 	if not res.get("ok", false):
 		return res
 	var clip = res["clip"]
@@ -813,6 +929,8 @@ func get_full_state() -> Dictionary:
 		"model_transform": get_model_transform_dict(),
 		"spring_bone": get_spring_bone_params_dict(),
 		"available_animations": vrma_player.get_clip_names(),
+		"shader_presets": list_shader_presets().map(func(x): return x.name),
+		"motion": motion.state() if motion != null else {},
 		"animation": _anim_state_dict(),
 		"idle": procedural_idle.get_params(),
 		"expressions": _expr_weights_dict(),
@@ -965,7 +1083,7 @@ func _build_main_file_dialogs() -> void:
 	_main_dialog_vrma.theme = th
 	_main_dialog_vrma.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	_main_dialog_vrma.access = FileDialog.ACCESS_FILESYSTEM
-	_main_dialog_vrma.filters = PackedStringArray(["*.vrma ; VRM Animation"])
+	_main_dialog_vrma.filters = PackedStringArray(["*.vrma,*.npz ; アニメーション (VRMA / SMPL の npz)", "*.vrma ; VRM Animation", "*.npz ; SMPL 系のモーション (AMASS など)"])
 	_main_dialog_vrma.file_selected.connect(func(p: String): load_vrma_file(p, "", true))
 	add_child(_main_dialog_vrma)
 
