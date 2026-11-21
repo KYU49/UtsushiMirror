@@ -354,6 +354,15 @@ func _dispatch_rpc(client_id: int, id_json: String, method: String, params: Dict
 		"stop_walk":
 			motion.stop_walk()
 			_reply_ok(client_id, id_json, motion.state())
+		"turn":
+			var tres2: Dictionary = motion.start_turn(params)
+			if tres2.get("ok", false):
+				_reply_ok(client_id, id_json, tres2)
+			else:
+				_reply_err(client_id, id_json, -32602, str(tres2.get("error", "turn failed")))
+		"set_model_transform":
+			set_model_transform(params)
+			_reply_ok(client_id, id_json, get_model_transform_dict())
 		"get_motion_state":
 			_reply_ok(client_id, id_json, motion.state())
 		"reload_presets":
@@ -474,11 +483,11 @@ func _dispatch_rpc(client_id: int, id_json: String, method: String, params: Dict
 			set_bones_pose(params)
 			_reply_ok(client_id, id_json, {"ok": true})
 		"reset_bones":
-			reset_bones_pose()
+			reset_bones_pose_smooth(float(params.get("transition_sec", 0.0)))
 			_reply_ok(client_id, id_json, {"ok": true})
 		"apply_pose_preset":
 			var p_name: String = str(params.get("preset", "reset"))
-			apply_pose_preset(p_name)
+			apply_pose_preset(p_name, float(params.get("transition_sec", 0.0)), bool(params.get("keep_animation", false)))
 			_reply_ok(client_id, id_json, {"ok": true, "preset": p_name})
 		"restore_normal_window":
 			bg_manager.restore_normal_window()
@@ -794,6 +803,11 @@ func set_first_person_mode(enabled: bool) -> void:
 func set_bones_pose(params: Dictionary) -> void:
 	if current_vrm == null:
 		return
+	var trans := float(params.get("transition_sec", 0.0))
+	if trans > 0.0:
+		_set_bones_pose_smooth(params, trans)
+		return
+	motion.cancel_blend()
 	if bool(params.get("clear_others", false)):
 		current_vrm.direct_bone_overrides.clear()
 		_direct_bone_euler_deg.clear()
@@ -822,8 +836,47 @@ func set_bones_pose(params: Dictionary) -> void:
 		current_vrm.has_direct_hips_offset = true
 
 
+## ボーンの指定を transition_sec 秒かけてなめらかに付ける
+func _set_bones_pose_smooth(params: Dictionary, trans: float) -> void:
+	var target := {}
+	var bones: Dictionary = params.get("bones", {})
+	for bname in bones.keys():
+		var sb := str(bname)
+		var spec: Dictionary = bones[bname]
+		if typeof(spec.get("quat_xyzw", null)) == TYPE_ARRAY and spec["quat_xyzw"].size() >= 4:
+			var q: Array = spec["quat_xyzw"]
+			target[sb] = Quaternion(float(q[0]), float(q[1]), float(q[2]), float(q[3])).normalized()
+		elif typeof(spec.get("euler_deg", null)) == TYPE_ARRAY and spec["euler_deg"].size() >= 3:
+			var e: Array = spec["euler_deg"]
+			target[sb] = Quaternion.from_euler(Vector3(deg_to_rad(float(e[0])), deg_to_rad(float(e[1])), deg_to_rad(float(e[2]))))
+		if target.has(sb):
+			var er: Vector3 = (target[sb] as Quaternion).get_euler()
+			_direct_bone_euler_deg[sb] = Vector3(rad_to_deg(er.x), rad_to_deg(er.y), rad_to_deg(er.z))
+	if typeof(params.get("hips_position", null)) == TYPE_ARRAY and params["hips_position"].size() >= 3:
+		var hp: Array = params["hips_position"]
+		current_vrm.direct_hips_offset = Vector3(float(hp[0]), float(hp[1]), float(hp[2]))
+		current_vrm.has_direct_hips_offset = true
+	motion.blend_bones(target, trans, bool(params.get("clear_others", false)))
+	_emit_state_changed()
+
+
+## ボーンの直接指定を transition_sec 秒かけて外し、アニメーションの姿勢へ戻す
+func reset_bones_pose_smooth(trans: float) -> void:
+	if current_vrm == null:
+		return
+	if trans <= 0.0:
+		reset_bones_pose()
+		return
+	current_vrm.has_direct_hips_offset = false
+	current_vrm.direct_hips_offset = Vector3.ZERO
+	motion.blend_bones({}, trans, true)
+	_emit_state_changed()
+
+
 func reset_bones_pose() -> void:
 	_direct_bone_euler_deg.clear()
+	if motion != null:
+		motion.cancel_blend()
 	if current_vrm == null:
 		return
 	current_vrm.direct_bone_overrides.clear()
@@ -1582,10 +1635,16 @@ static func _quat_to_euler_deg(q: Quaternion) -> Array:
 	return [rad_to_deg(e.x), rad_to_deg(e.y), rad_to_deg(e.z)]
 
 
-func apply_pose_preset(preset_name: String) -> void:
-	stop_animation_internal()
-	reset_bones_pose()
+## transition_sec > 0 なら、今の姿勢からなめらかに移す。
+## keep_animation = true なら、再生中のアニメーションを止めずに、その上へポーズを重ねる。
+func apply_pose_preset(preset_name: String, transition_sec: float = 0.0, keep_animation: bool = false) -> void:
+	if not keep_animation:
+		stop_animation_internal()
+	if transition_sec <= 0.0:
+		reset_bones_pose()
 	if current_vrm == null or preset_name == "t_pose" or preset_name == "reset":
+		if transition_sec > 0.0:
+			reset_bones_pose_smooth(transition_sec)
 		_emit_state_changed()
 		return
 
@@ -1681,6 +1740,9 @@ func apply_pose_preset(preset_name: String) -> void:
 	for k in bones.keys():
 		spec_bones[k] = {"euler_deg": bones[k]}
 	var pose_params: Dictionary = {"bones": spec_bones}
+	if transition_sec > 0.0:
+		pose_params["transition_sec"] = transition_sec
+		pose_params["clear_others"] = true
 	if hips_pos.length_squared() > 1e-8:
 		pose_params["hips_position"] = [hips_pos.x, hips_pos.y, hips_pos.z]
 	set_bones_pose(pose_params)

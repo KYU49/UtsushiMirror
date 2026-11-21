@@ -1,5 +1,6 @@
 extends RefCounted
-## 外部 (MCP / WebSocket) からの「自然にしゃべる (口を動かす)」「自然に歩く」を受け持つ。
+## 外部 (MCP / WebSocket) からの「自然にしゃべる (口を動かす)」「自然に歩く」「その場で回る」と、
+## ポーズをなめらかに移すことを受け持つ。
 ## app_controller の _process から毎フレーム process() を呼ぶ。
 
 const MOUTH := ["aa", "ih", "ou", "ee", "oh"]
@@ -30,6 +31,18 @@ var _w_clip := ""
 const TURN_DEG_PER_SEC := 240.0
 const ACCEL_SEC := 0.3
 
+# ---------------------------------------------------------------- その場で回る
+var turning := false
+var _t_from := 0.0
+var _t_delta := 0.0
+var _t_dur := 0.0
+var _t_t := 0.0
+
+# ---------------------------------------------------------------- ポーズをなめらかに移す
+var _blend := {}  # bone -> {mode: "slerp"|"in"|"out", from, to, from_w}
+var _blend_t := 0.0
+var _blend_dur := 0.0
+
 
 func _init(controller) -> void:
 	ctl = controller
@@ -41,6 +54,8 @@ func state() -> Dictionary:
 		"talk_remaining_sec": maxf(0.0, _talk_dur - _talk_t) if talking else 0.0,
 		"walking": walking,
 		"walk_phase": _w_phase if walking else "",
+		"turning": turning,
+		"blending_pose": not _blend.is_empty(),
 	}
 
 
@@ -49,6 +64,143 @@ func process(dt: float) -> void:
 		_process_talk(dt)
 	if walking:
 		_process_walk(dt)
+	if turning:
+		_process_turn(dt)
+	if not _blend.is_empty():
+		_process_blend(dt)
+
+
+# =====================================================================
+# その場で回る
+# =====================================================================
+
+## params:
+##   angle_deg: 回る角度 (既定 360 = 1 回転)。+ で上から見て反時計回り (キャラクターから見て左回り)
+##   to: "camera" にすると、カメラの方を向くまで回る (angle_deg は足し算の回転として使う。既定 0)
+##   duration_sec: かける時間 (既定は角度に合わせて。1 回転で約 0.9 秒)
+func start_turn(params: Dictionary) -> Dictionary:
+	if ctl.current_vrm == null:
+		return {"ok": false, "error": "モデルが読み込まれていません"}
+	if walking:
+		return {"ok": false, "error": "歩いている途中です"}
+	var root: Node3D = ctl.model_root
+	var delta := 0.0
+	if str(params.get("to", "")) == "camera":
+		var cam: Vector3 = ctl.camera_rig.get_camera_world_position()
+		var p := root.position
+		delta = angle_difference(root.rotation.y, atan2(cam.x - p.x, cam.z - p.z))
+		var extra := float(params.get("angle_deg", 0.0))
+		if absf(extra) > 0.5:
+			# 余分に回るときは、向く方向と同じ回り方にそろえる
+			delta += deg_to_rad(absf(extra)) * (signf(extra) if absf(delta) < 0.01 else signf(delta))
+	else:
+		delta = deg_to_rad(float(params.get("angle_deg", 360.0)))
+	var dur := float(params.get("duration_sec", 0.0))
+	if dur <= 0.0:
+		dur = 0.15 + absf(rad_to_deg(delta)) / 480.0
+	_t_from = root.rotation.y
+	_t_delta = delta
+	_t_dur = clampf(dur, 0.05, 30.0)
+	_t_t = 0.0
+	turning = true
+	return {"ok": true, "angle_deg": snappedf(rad_to_deg(delta), 0.1), "duration_sec": snappedf(_t_dur, 0.01)}
+
+
+func stop_turn() -> void:
+	turning = false
+
+
+func _process_turn(dt: float) -> void:
+	if ctl.current_vrm == null:
+		turning = false
+		return
+	_t_t += dt
+	var k := clampf(_t_t / _t_dur, 0.0, 1.0)
+	k = k * k * (3.0 - 2.0 * k)  # ゆっくり始まって、ゆっくり止まる
+	ctl.model_root.rotation.y = wrapf(_t_from + _t_delta * k, -PI, PI)
+	if _t_t >= _t_dur:
+		turning = false
+		ctl._emit_state_changed()
+
+
+# =====================================================================
+# ポーズをなめらかに移す (直接指定のボーン)
+# =====================================================================
+
+## target: ボーン名 -> Quaternion。dur 秒かけて、今の姿勢から target へ移す。
+## clear_others: target に無い直接指定は、アニメーションの姿勢へなめらかに戻して外す。
+func blend_bones(target: Dictionary, dur: float, clear_others: bool) -> void:
+	var vrm = ctl.current_vrm
+	if vrm == null:
+		return
+	_finish_blend()
+	var ov: Dictionary = vrm.direct_bone_overrides
+	var w: Dictionary = vrm.direct_bone_weights
+	for b in target.keys():
+		var q: Quaternion = target[b]
+		if ov.has(b) and float(w.get(b, 1.0)) >= 0.999:
+			_blend[b] = {"mode": "slerp", "from": ov[b], "to": q}
+		else:
+			var from_w := float(w.get(b, 0.0)) if ov.has(b) else 0.0
+			ov[b] = q
+			w[b] = from_w
+			_blend[b] = {"mode": "in", "from_w": from_w}
+	if clear_others:
+		for b in ov.keys():
+			if not target.has(b):
+				_blend[b] = {"mode": "out", "from_w": float(w.get(b, 1.0))}
+	_blend_t = 0.0
+	_blend_dur = maxf(dur, 0.0)
+	if _blend_dur <= 0.0:
+		_finish_blend()
+
+
+## 途中のポーズの移り変わりを、行き先の姿勢にして終える
+func _finish_blend() -> void:
+	var vrm = ctl.current_vrm
+	if vrm != null:
+		for b in _blend.keys():
+			var e: Dictionary = _blend[b]
+			match str(e["mode"]):
+				"slerp":
+					vrm.direct_bone_overrides[b] = e["to"]
+				"in":
+					vrm.direct_bone_weights.erase(b)
+				"out":
+					vrm.direct_bone_overrides.erase(b)
+					vrm.direct_bone_weights.erase(b)
+					ctl._direct_bone_euler_deg.erase(b)
+	_blend = {}
+
+
+## 途中のポーズの移り変わりを、その場で捨てる (すぐに姿勢を消すとき)
+func cancel_blend() -> void:
+	_blend = {}
+	if ctl.current_vrm != null:
+		ctl.current_vrm.direct_bone_weights.clear()
+
+
+func _process_blend(dt: float) -> void:
+	var vrm = ctl.current_vrm
+	if vrm == null:
+		_blend = {}
+		return
+	_blend_t += dt
+	if _blend_t >= _blend_dur:
+		_finish_blend()
+		ctl._emit_state_changed()
+		return
+	var k := clampf(_blend_t / _blend_dur, 0.0, 1.0)
+	k = k * k * (3.0 - 2.0 * k)
+	for b in _blend.keys():
+		var e: Dictionary = _blend[b]
+		match str(e["mode"]):
+			"slerp":
+				vrm.direct_bone_overrides[b] = (e["from"] as Quaternion).slerp(e["to"], k)
+			"in":
+				vrm.direct_bone_weights[b] = lerpf(float(e["from_w"]), 1.0, k)
+			"out":
+				vrm.direct_bone_weights[b] = lerpf(float(e["from_w"]), 0.0, k)
 
 
 # =====================================================================

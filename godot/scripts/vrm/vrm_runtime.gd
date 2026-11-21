@@ -30,6 +30,8 @@ var materials: Array = []
 var animation_player = null # VrmaPlayer set in Milestone 3
 var procedural_idle = null # ProceduralIdle set in Milestone 3
 var direct_bone_overrides: Dictionary = {} # human_bone -> Quaternion
+## 直接指定の効き具合 (0-1)。無いボーンは 1。ポーズをなめらかに出し入れするときに使う
+var direct_bone_weights: Dictionary = {} # human_bone -> float
 var direct_hips_offset: Vector3 = Vector3.ZERO
 var has_direct_hips_offset: bool = false
 var vmc_bone_overrides: Dictionary = {} # human_bone -> Quaternion
@@ -121,7 +123,11 @@ func step(dt: float) -> void:
 		hips_delta = vmc_hips_offset
 
 	for bname in direct_bone_overrides.keys():
-		composed_bones[bname] = direct_bone_overrides[bname]
+		var dq: Quaternion = direct_bone_overrides[bname]
+		var dw: float = float(direct_bone_weights.get(bname, 1.0))
+		if dw < 0.999:
+			dq = (composed_bones.get(bname, Quaternion.IDENTITY) as Quaternion).slerp(dq, clampf(dw, 0.0, 1.0))
+		composed_bones[bname] = dq
 	if has_direct_hips_offset:
 		hips_delta = direct_hips_offset
 

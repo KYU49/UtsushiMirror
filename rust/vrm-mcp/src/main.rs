@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -213,15 +214,58 @@ fn tool_definitions() -> Value {
                         "description": "Map of boneName -> { euler_deg: [x,y,z] } or { quat_xyzw: [x,y,z,w] }"
                     },
                     "hips_position": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                    "clear_others": { "type": "boolean", "default": false }
+                    "clear_others": { "type": "boolean", "default": false },
+                    "transition_sec": { "type": "number", "default": 0, "description": "Seconds to blend smoothly from the current pose (0 = snap). Blending keeps the playing animation underneath." }
                 },
                 "required": ["bones"]
             }
         },
         {
             "name": "vrm_reset_pose",
-            "description": "Reset all direct bone overrides and expressions back to neutral.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "Reset all direct bone overrides and expressions back to neutral. With transition_sec, the bones blend smoothly back to the playing animation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "transition_sec": { "type": "number", "default": 0 }
+                }
+            }
+        },
+        {
+            "name": "vrm_apply_pose_preset",
+            "description": "Apply a built-in pose (a_pose, attention, wave, peace, sit, hands_on_hips, reset). With keep_animation the pose is layered on top of the playing animation (e.g. a peace sign while idling).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preset": { "type": "string", "enum": ["a_pose", "attention", "wave", "peace", "sit", "hands_on_hips", "reset"] },
+                    "transition_sec": { "type": "number", "default": 0, "description": "Seconds to blend smoothly into the pose (0 = snap)." },
+                    "keep_animation": { "type": "boolean", "default": false }
+                },
+                "required": ["preset"]
+            }
+        },
+        {
+            "name": "vrm_set_model_transform",
+            "description": "Place the character in the world: position [x, y, z] in meters (the camera looks from +z toward the origin by default, so +x is screen-right and -x is screen-left), rotation_y_deg (0 = facing +z / the default camera), scale.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "position": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                    "rotation_y_deg": { "type": "number" },
+                    "scale": { "type": "number" }
+                }
+            }
+        },
+        {
+            "name": "vrm_turn",
+            "description": "Turn the whole character in place with a smooth ease in/out. angle_deg 360 = one full spin (positive = counter-clockwise seen from above). to: \"camera\" turns to face the camera (angle_deg then adds extra spin). Returns the duration.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "angle_deg": { "type": "number", "default": 360 },
+                    "to": { "type": "string", "enum": ["camera"] },
+                    "duration_sec": { "type": "number", "description": "Default: about 0.9 s per full turn." }
+                }
+            }
         },
         {
             "name": "vrm_set_background",
@@ -434,8 +478,21 @@ fn handle_tool_call(ws: &str, name: &str, args: Value) -> Result<Value> {
             Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
         }
         "vrm_reset_pose" => {
-            let _ = call_viewer(ws, "reset_bones", json!({}))?;
-            let v = call_viewer(ws, "reset_expressions", json!({ "transition_sec": 0.0 }))?;
+            let t = args.get("transition_sec").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            let _ = call_viewer(ws, "reset_bones", json!({ "transition_sec": t }))?;
+            let v = call_viewer(ws, "reset_expressions", json!({ "transition_sec": t }))?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_apply_pose_preset" => {
+            let v = call_viewer(ws, "apply_pose_preset", args)?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_set_model_transform" => {
+            let v = call_viewer(ws, "set_model_transform", args)?;
+            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+        }
+        "vrm_turn" => {
+            let v = call_viewer(ws, "turn", args)?;
             Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
         }
         "vrm_set_background" => {
