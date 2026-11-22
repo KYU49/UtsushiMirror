@@ -176,6 +176,16 @@ class VrmaPlayer:
 	var _blend_elapsed: float = 0.0
 	var _blend_duration: float = 0.0
 	var _last_pose: Dictionary = {}
+	var _last_dst_y: float = 0.9
+	## 姿勢の違いを測る骨 (指や目は見ない)
+	const BLEND_MEASURE_BONES := [
+		"hips", "spine", "chest", "upperChest", "neck", "head",
+		"leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm",
+		"leftUpperLeg", "rightUpperLeg", "leftLowerLeg", "rightLowerLeg",
+	]
+	const BLEND_SMALL_DEG := 30.0
+	const BLEND_LARGE_DEG := 120.0
+	const BLEND_MAX_SEC := 1.0
 
 	func add_clip(clip_name: String, clip: VrmaClip) -> void:
 		clips[clip_name] = clip
@@ -195,7 +205,9 @@ class VrmaPlayer:
 			return false
 		if playing and not _last_pose.is_empty() and blend_sec > 0.001:
 			_prev_pose = _last_pose.duplicate(true)
-			_blend_duration = blend_sec
+			# 次の動きの最初の姿勢が今の姿勢から大きく違うほど、ゆっくりつなぐ
+			var first: Dictionary = clips[clip_name].evaluate(0.0, _last_dst_y)
+			_blend_duration = auto_blend_sec(blend_sec, pose_distance_deg(_last_pose, first))
 			_blend_elapsed = 0.0
 		else:
 			_prev_pose = {}
@@ -244,6 +256,7 @@ class VrmaPlayer:
 					paused = true
 
 		var dst_y: float = humanoid.hips_rest_height if humanoid != null else 0.9
+		_last_dst_y = dst_y
 		var pose := current_clip.evaluate(time_sec, dst_y)
 		if strip_root_xz:
 			var hd: Vector3 = pose.get("hips_delta", Vector3.ZERO)
@@ -256,10 +269,38 @@ class VrmaPlayer:
 				_prev_pose = {}
 				_blend_duration = 0.0
 			else:
-				pose = _blend_poses(_prev_pose, pose, w)
+				pose = _blend_poses(_prev_pose, pose, ease_out(w))
 
 		_last_pose = pose
 		return pose
+
+	## 始めは速く、終わりにゆっくり止まる (3 次の ease out)
+	static func ease_out(x: float) -> float:
+		var r := 1.0 - clampf(x, 0.0, 1.0)
+		return 1.0 - r * r * r
+
+	## 2 つの姿勢の違い (度)。体の大きな骨の回転の違いの最大と、腰の移動 (0.1 m を 30 度と見る) の大きい方
+	static func pose_distance_deg(a: Dictionary, b: Dictionary) -> float:
+		var abones: Dictionary = a.get("bones", {})
+		var bbones: Dictionary = b.get("bones", {})
+		var worst := 0.0
+		for k in BLEND_MEASURE_BONES:
+			if not abones.has(k) and not bbones.has(k):
+				continue
+			var qa: Quaternion = abones.get(k, Quaternion.IDENTITY)
+			var qb: Quaternion = bbones.get(k, Quaternion.IDENTITY)
+			var d := clampf(absf(qa.normalized().dot(qb.normalized())), 0.0, 1.0)
+			worst = maxf(worst, rad_to_deg(2.0 * acos(d)))
+		var ah: Vector3 = a.get("hips_delta", Vector3.ZERO)
+		var bh: Vector3 = b.get("hips_delta", Vector3.ZERO)
+		return maxf(worst, ah.distance_to(bh) * 300.0)
+
+	## つなぐ秒数。違いが BLEND_SMALL_DEG までは指定のまま、BLEND_LARGE_DEG で BLEND_MAX_SEC まで伸ばす
+	static func auto_blend_sec(base_sec: float, diff_deg: float) -> float:
+		if base_sec <= 0.001:
+			return base_sec
+		var k := clampf((diff_deg - BLEND_SMALL_DEG) / (BLEND_LARGE_DEG - BLEND_SMALL_DEG), 0.0, 1.0)
+		return maxf(base_sec, lerpf(base_sec, BLEND_MAX_SEC, k))
 
 	static func _blend_poses(a: Dictionary, b: Dictionary, w: float) -> Dictionary:
 		var out_bones: Dictionary = {}
