@@ -1394,7 +1394,7 @@ func _refresh_context_menu() -> void:
 			for nm in parts[key]:
 				var id := _ctx_anim_names.size()
 				_ctx_anim_names.append(nm)
-				sub.add_check_item(AnimCategoryScript.short_name(nm), id)
+				sub.add_check_item(AnimCategoryScript.display_name(nm), id)
 				var on: bool = vrma_player.playing and vrma_player.current_name == nm
 				sub.set_item_checked(sub.get_item_index(id), on)
 				any_playing = any_playing or on
