@@ -3,7 +3,7 @@ extends SceneTree
 ## 実行: VRMVIEWER_CONFIG=<一時ファイル> godot --path godot -s res://scripts/tests/test_anim_snapshot.gd -- <clip> <秒> <png>
 var _m: Node
 var _t := 0.0
-var _clip := "idle"
+var _clip := "Idle_Loop"
 var _sec := 2.0
 var _out := ""
 var _started := false

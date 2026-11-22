@@ -12,6 +12,7 @@ var controller = null
 var _syncing: bool = false
 
 const ConfigManagerScript := preload("res://scripts/core/config_manager.gd")
+const AnimCategoryScript := preload("res://scripts/core/anim_category.gd")
 const UiThemeScript := preload("res://scripts/ui/ui_theme.gd")
 const LightDirectionPadScript := preload("res://scripts/ui/light_direction_pad.gd")
 const LightingRigScript := preload("res://scripts/core/lighting_rig.gd")
@@ -125,6 +126,8 @@ var _available_human_bones: Array[String] = []
 
 # Tab 5: Anim
 var _anim_list: ItemList
+var _anim_cat_opt: OptionButton  # カテゴリーで絞る (0 = すべて)
+var _anim_names_shown: Array = []  # 一覧に出している名前 (変わったときだけ作り直す)
 var _fx_preset_flow: HFlowContainer
 var _fx_preset_name: LineEdit
 var _anim_scrub: HSlider
@@ -2036,14 +2039,69 @@ func _push_hips_offset() -> void:
 # Tab 5: Anim
 # ---------------------------------------------------------------------------
 
+## 一覧の idx 行の動きの名前 (カテゴリーの見出しの行は "")
+func _anim_item_name(idx: int) -> String:
+	if idx < 0 or idx >= _anim_list.item_count:
+		return ""
+	return str(_anim_list.get_item_metadata(idx))
+
+
+## 動きの一覧を、カテゴリーごとに見出しを付けて作り直す。カテゴリーを選んでいれば、そのカテゴリーだけ
+func _fill_anim_list() -> void:
+	var groups: Array = AnimCategoryScript.group(_anim_names_shown)
+	# カテゴリーの選び肢を、今あるカテゴリーに合わせる (選んでいたものは残す)
+	var want := ["すべて"]
+	for g in groups:
+		want.append("%s (%d)" % [g[0], g[1].size()])
+	var picked := ""
+	if _anim_cat_opt.selected > 0:
+		picked = _anim_cat_opt.get_item_text(_anim_cat_opt.selected).get_slice(" (", 0)
+	var have := []
+	for i in _anim_cat_opt.item_count:
+		have.append(_anim_cat_opt.get_item_text(i))
+	if have != want:
+		_anim_cat_opt.clear()
+		for t in want:
+			_anim_cat_opt.add_item(t)
+		_anim_cat_opt.select(0)
+		for i in range(1, want.size()):
+			if str(want[i]).get_slice(" (", 0) == picked:
+				_anim_cat_opt.select(i)
+	var only := ""
+	if _anim_cat_opt.selected > 0:
+		only = _anim_cat_opt.get_item_text(_anim_cat_opt.selected).get_slice(" (", 0)
+	_anim_list.clear()
+	for g in groups:
+		if only != "" and g[0] != only:
+			continue
+		if only == "":
+			var h := _anim_list.add_item("― %s ―" % g[0], null, false)
+			_anim_list.set_item_metadata(h, "")
+			_anim_list.set_item_disabled(h, true)
+		for nm in g[1]:
+			var i := _anim_list.add_item(("    " if only == "" else "") + str(nm))
+			_anim_list.set_item_metadata(i, str(nm))
+
+
 func _build_tab_animation() -> void:
 	var vb := _new_tab("Anim")
 	_add_section(vb, "VRMA アニメーション再生")
+	var crow := HBoxContainer.new()
+	var cl := Label.new()
+	cl.text = "カテゴリー"
+	crow.add_child(cl)
+	_anim_cat_opt = OptionButton.new()
+	_anim_cat_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_anim_cat_opt.add_item("すべて")
+	_anim_cat_opt.item_selected.connect(func(_i: int): _fill_anim_list())
+	crow.add_child(_anim_cat_opt)
+	vb.add_child(crow)
 	_anim_list = ItemList.new()
 	_anim_list.custom_minimum_size = Vector2(0, 300)
 	_anim_list.item_activated.connect(func(idx: int):
-		if controller != null:
-			controller.play_animation_internal(_anim_list.get_item_text(idx), _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
+		var nm := _anim_item_name(idx)
+		if controller != null and nm != "":
+			controller.play_animation_internal(nm, _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
 	)
 	vb.add_child(_anim_list)
 
@@ -2052,8 +2110,8 @@ func _build_tab_animation() -> void:
 	b_play.text = "再生"
 	b_play.pressed.connect(func():
 		var sel := _anim_list.get_selected_items()
-		if controller != null and not sel.is_empty():
-			controller.play_animation_internal(_anim_list.get_item_text(sel[0]), _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
+		if controller != null and not sel.is_empty() and _anim_item_name(sel[0]) != "":
+			controller.play_animation_internal(_anim_item_name(sel[0]), _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
 	)
 	row.add_child(b_play)
 
@@ -2732,17 +2790,12 @@ func _refresh_from_controller() -> void:
 	_pose_hz.value = hp.z
 
 	# Animations list
-	var anims: Array = st.get("available_animations", [])
-	var cur_names := []
-	for i in _anim_list.item_count:
-		cur_names.append(_anim_list.get_item_text(i))
 	var new_names := []
-	for a in anims:
+	for a in st.get("available_animations", []):
 		new_names.append(str(a))
-	if cur_names != new_names:
-		_anim_list.clear()
-		for a in anims:
-			_anim_list.add_item(str(a))
+	if _anim_names_shown != new_names:
+		_anim_names_shown = new_names
+		_fill_anim_list()
 	var anim_st: Dictionary = st.get("animation", {})
 	_anim_loop_chk.button_pressed = bool(anim_st.get("looping", true))
 	_anim_speed_slider.value = float(anim_st.get("speed", 1.0))

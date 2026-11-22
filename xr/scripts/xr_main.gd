@@ -33,7 +33,7 @@ var _face_user_on_release: bool = true
 var _vmc_active: bool = false
 var _http: HTTPRequest
 var _pending_download: Dictionary = {}
-var _last_animation: String = "idle"
+var _last_animation: String = "Idle_Loop"
 
 
 func _ready() -> void:

@@ -147,7 +147,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "vrm_play_animation",
-            "description": "Play a loaded animation by name. Includes bundled .vrma clips (idle, walk, run, sit, Walk_Loop, Idle_Loop, Dance_Loop, ...) and every .vrma / .npz (SMPL motion) placed in the presets folder. Call vrm_get_state and read available_animations for the full list.",
+            "description": "Play a loaded animation by name. Includes bundled .vrma clips (Idle_Loop, Walk_Loop, Dance_Loop, female_greeting_bow_01, male_walk_normal_01, ...) and every .vrma / .npz (SMPL motion) placed in the presets folder. Call vrm_get_state and read available_animations for the full list, or animation_categories for the list grouped by category.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

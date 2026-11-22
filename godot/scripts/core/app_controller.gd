@@ -9,6 +9,7 @@ signal model_loaded(info: Dictionary)
 
 const VrmLoaderScript := preload("res://scripts/vrm/vrm_loader.gd")
 const VrmaLoaderScript := preload("res://scripts/vrm/vrma_loader.gd")
+const AnimCategoryScript := preload("res://scripts/core/anim_category.gd")
 const NpzMotionLoaderScript := preload("res://scripts/vrm/npz_motion_loader.gd")
 const MotionDirectorScript := preload("res://scripts/core/motion_director.gd")
 const ProceduralIdleScript := preload("res://scripts/core/procedural_idle.gd")
@@ -51,7 +52,7 @@ var recent_settings_paths: Array[String] = []
 const RECENT_SETTINGS_MAX := 10
 var ws_port: int = 19100
 var osc_port: int = 39539
-var _last_animation: String = "idle"
+var _last_animation: String = "Idle_Loop"
 var _last_lookat_mode: String = "camera"
 var _last_lookat_manual_target: Vector3 = Vector3(0.0, 1.4, 2.0)
 var _last_first_person: bool = false
@@ -70,6 +71,7 @@ var _overlay_error_lbl: Label = null
 var _context_menu: PopupMenu = null
 var _ctx_cam_menu: PopupMenu = null
 var _ctx_anim_menu: PopupMenu = null
+var _ctx_anim_names: Array[String] = []  # 右クリックの動きの小メニューの id → 名前
 var _ctx_bg_menu: PopupMenu = null
 var _main_dialog_vrm: FileDialog = null
 var _main_dialog_vrma: FileDialog = null
@@ -687,6 +689,8 @@ func load_vrm(path: String, keep_camera: bool = false) -> Dictionary:
 		if recent_vrm_paths.size() > 10:
 			recent_vrm_paths.resize(10)
 
+	if _last_animation != "" and not vrma_player.has_clip(_last_animation):
+		_last_animation = "Idle_Loop"  # 前に使っていた動きが無くなったとき (同梱の idle などを消した)
 	if _last_animation != "" and vrma_player.has_clip(_last_animation):
 		vrma_player.play(_last_animation, true, 1.0, 0.0)
 	if not keep_camera:
@@ -1028,6 +1032,7 @@ func get_full_state() -> Dictionary:
 		"model_transform": get_model_transform_dict(),
 		"spring_bone": get_spring_bone_params_dict(),
 		"available_animations": vrma_player.get_clip_names(),
+		"animation_categories": _animation_categories(),
 		"shader_presets": list_shader_presets().map(func(x): return x.name),
 		"motion": motion.state() if motion != null else {},
 		"animation": _anim_state_dict(),
@@ -1364,10 +1369,26 @@ func _refresh_context_menu() -> void:
 	_context_menu.add_submenu_node_item("カメラ", _ctx_cam_menu, 10)
 
 	_ctx_anim_menu.clear()
-	var clips: Array[String] = vrma_player.get_clip_names()
-	for i in range(clips.size()):
-		_ctx_anim_menu.add_check_item(clips[i], i)
-		_ctx_anim_menu.set_item_checked(i, vrma_player.playing and vrma_player.current_name == clips[i])
+	for c in _ctx_anim_menu.get_children():
+		if c is PopupMenu:
+			_ctx_anim_menu.remove_child(c)
+			c.queue_free()
+	# カテゴリーごとの小メニューに分ける
+	_ctx_anim_names.clear()
+	for g in AnimCategoryScript.group(vrma_player.get_clip_names()):
+		var sub := PopupMenu.new()
+		sub.theme = _ctx_anim_menu.theme
+		sub.id_pressed.connect(_on_ctx_anim_id)
+		_ctx_anim_menu.add_child(sub)
+		var any_playing := false
+		for nm in g[1]:
+			var id := _ctx_anim_names.size()
+			_ctx_anim_names.append(str(nm))
+			sub.add_check_item(str(nm), id)
+			var on: bool = vrma_player.playing and vrma_player.current_name == str(nm)
+			sub.set_item_checked(sub.get_item_index(id), on)
+			any_playing = any_playing or on
+		_ctx_anim_menu.add_submenu_node_item(("● " if any_playing else "") + str(g[0]), sub)
 	_ctx_anim_menu.add_separator()
 	_ctx_anim_menu.add_item("停止 / リセット (Rest Pose)", 999)
 	_context_menu.add_submenu_node_item("ポーズ / アニメーション", _ctx_anim_menu, 11)
@@ -1425,14 +1446,21 @@ func _on_ctx_cam_id(id: int) -> void:
 		camera_rig.auto_frame(current_vrm.get_approx_bounds())
 
 
+## カテゴリー → 名前の並び (一覧と同じ順)
+func _animation_categories() -> Dictionary:
+	var out := {}
+	for g in AnimCategoryScript.group(vrma_player.get_clip_names()):
+		out[g[0]] = g[1]
+	return out
+
+
 func _on_ctx_anim_id(id: int) -> void:
 	if id == 999:
 		stop_animation_internal()
 		reset_bones_pose()
 		return
-	var idx: int = _ctx_anim_menu.get_item_index(id)
-	if idx >= 0:
-		play_animation_internal(_ctx_anim_menu.get_item_text(idx), true, 1.0, 0.25)
+	if id >= 0 and id < _ctx_anim_names.size():
+		play_animation_internal(_ctx_anim_names[id], true, 1.0, 0.25)
 
 
 func _on_ctx_bg_id(id: int) -> void:

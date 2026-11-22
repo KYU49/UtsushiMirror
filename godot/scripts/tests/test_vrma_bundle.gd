@@ -5,7 +5,9 @@ func _initialize() -> void:
 	var root := ProjectSettings.globalize_path("res://../assets/animations").simplify_path()
 	var ok := 0
 	var ng := 0
-	for sub in ["", "quaternius"]:
+	var subs: Array = [""]
+	subs.append_array(Array(DirAccess.get_directories_at(root)))
+	for sub in subs:
 		var d := root.path_join(sub)
 		for fn in DirAccess.get_files_at(d):
 			if not fn.ends_with(".vrma"):

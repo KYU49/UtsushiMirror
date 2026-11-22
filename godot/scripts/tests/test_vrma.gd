@@ -46,7 +46,7 @@ func _run_tests() -> void:
 		files.sort()
 
 	print("Found .vrma files: ", files.size())
-	var ok := (files.size() == 12)
+	var ok := (files.size() >= 1)  # 直下は確認用 (for-test_*) の動き
 	for fn in files:
 		var loaded: Dictionary = VrmaLoaderScript.load_vrma(anim_dir.path_join(fn))
 		if not loaded.get("ok", false):
@@ -66,7 +66,7 @@ func _run_tests() -> void:
 		print("  verified ", fn, " dur=", snappedf(clip.duration, 0.01), " tracks=", clip.bone_tracks.size())
 
 	# Test seek & pause determinism
-	player.play("walk", true, 1.0, 0.0)
+	player.play("for-test_squat", true, 1.0, 0.0)
 	player.paused = true
 	player.seek(0.25)
 	vrm.step(1.0 / 60.0)

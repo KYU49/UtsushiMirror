@@ -72,7 +72,9 @@ def main() -> None:
     w("  https://github.com/GodotVR/godot_openxr_vendors")
     w("")
     w("[同梱アニメーション / Bundled animations]")
-    w("- assets/animations/*.vrma (直下) — このプロジェクトで作成したもの")
+    w("- assets/animations/*.vrma (直下、確認用) と assets/animations/utsushi/*.vrma — このプロジェクトで作成したもの")
+    w("    utsushi/ の動きは、NVIDIA の動き生成モデル (NVIDIA Open Model License) で作り、手で直したもの。")
+    w("    文章の読み取りに Meta Llama 3 (Meta Llama 3 Community License) を使った。Built with Meta Llama 3.")
     for key, names in animations().items():
         w(f"- {key}")
         w(f"    VRMA conversion: open-vrma (CC0 1.0) https://huggingface.co/datasets/Sanami/open-vrma")

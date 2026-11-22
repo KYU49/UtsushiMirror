@@ -81,7 +81,7 @@ func _process(_d: float) -> bool:
 		var src := OS.get_environment("NPZ_SAMPLE")
 		if src != "":
 			DirAccess.copy_absolute(src, adir.path_join("npz_sample.npz"))
-		DirAccess.copy_absolute(ProjectSettings.globalize_path("res://../assets/animations/sit.vrma"), adir.path_join("my_sit.vrma"))
+		DirAccess.copy_absolute(ProjectSettings.globalize_path("res://../assets/animations/quaternius/Sitting_Idle_Loop.vrma"), adir.path_join("my_sit.vrma"))
 		var n: int = _m.reload_animation_presets()
 		_check("フォルダの .vrma が一覧に出る", _m.vrma_player.has_clip("my_sit"))
 		if src != "":
@@ -96,7 +96,7 @@ func _process(_d: float) -> bool:
 		_check("名前が空なら保存しない", not _m.save_shader_preset("  ").get("ok", true))
 	if _f == 920:
 		# その場で 1 回転
-		_m.play_animation_internal("idle", true, 1.0, 0.0)
+		_m.play_animation_internal("Idle_Loop", true, 1.0, 0.0)
 		_m.set_model_transform({"position": [0.0, 0.0, 0.0], "rotation_y_deg": 30.0})
 		var r: Dictionary = _m.motion.start_turn({"angle_deg": 360})
 		_check("回る命令を受け付ける", r.get("ok", false) and float(r.get("duration_sec", 0.0)) > 0.5)
@@ -116,7 +116,7 @@ func _process(_d: float) -> bool:
 		_check("ポーズが途中まで効いている", w > 0.0 and w < 1.0)
 	if _f == 1090:
 		_check("ピースになっている", _m.current_vrm.direct_bone_overrides.has("rightIndexProximal") and _m.current_vrm.direct_bone_weights.is_empty())
-		_check("アニメーションは止まらない", _m.vrma_player.playing and _m.vrma_player.current_name == "idle")
+		_check("アニメーションは止まらない", _m.vrma_player.playing and _m.vrma_player.current_name == "Idle_Loop")
 		_m.set_bones_pose({"bones": {"head": {"euler_deg": [0, 0, 12]}}, "transition_sec": 0.3})
 	if _f == 1096:
 		var hq: Quaternion = _m.current_vrm.direct_bone_overrides["head"]
