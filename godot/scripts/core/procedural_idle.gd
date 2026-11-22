@@ -75,8 +75,7 @@ func sample_idle(dt: float) -> Dictionary:
 		var b := sin(_time * 1.65)
 		bones["chest"] = Quaternion.from_euler(Vector3(deg_to_rad(1.6 * b * k), 0.0, 0.0))
 		bones["upperChest"] = Quaternion.from_euler(Vector3(deg_to_rad(1.2 * b * k), 0.0, 0.0))
-		bones["leftShoulder"] = Quaternion.from_euler(Vector3(0.0, 0.0, deg_to_rad(1.4 * b * k)))
-		bones["rightShoulder"] = Quaternion.from_euler(Vector3(0.0, 0.0, deg_to_rad(-1.4 * b * k)))
+		# 肩はすくめない。左右の肩を鏡写しに回すと、後ろや前で手を組む動きで両手が左右へ離れたり寄ったりする
 
 	# 2. Subtle standing sway
 	if sway:
