@@ -26,6 +26,7 @@ var recordings_dir: String = "recordings"
 
 var _record_accum: float = 0.0
 var _sequencer_busy: bool = false
+var _screenshot_busy: bool = false
 
 
 func setup(p_bridge: Node, p_out_vp: SubViewport, p_bg_mgr, p_cam_rig, p_light_rig) -> void:
@@ -40,7 +41,14 @@ func setup(p_bridge: Node, p_out_vp: SubViewport, p_bg_mgr, p_cam_rig, p_light_r
 func process_frame(delta: float) -> void:
 	if _sequencer_busy or output_viewport == null:
 		return
-	if not spout_enabled and not vcam_enabled and not recording_active:
+	var need_record := false
+	if recording_active and bridge != null:
+		var frame_dt := 1.0 / maxf(float(recording_fps), 1.0)
+		_record_accum += delta
+		if _record_accum >= frame_dt:
+			_record_accum = fmod(_record_accum, frame_dt)
+			need_record = true
+	if not spout_enabled and not vcam_enabled and not need_record:
 		return
 
 	var tex := output_viewport.get_texture()
@@ -60,17 +68,16 @@ func process_frame(delta: float) -> void:
 		bridge.send_spout_frame(w, h, data)
 	if vcam_enabled and bridge != null:
 		bridge.send_vcam_frame(w, h, data)
-	if recording_active and bridge != null:
-		var frame_dt := 1.0 / maxf(float(recording_fps), 1.0)
-		_record_accum += delta
-		if _record_accum >= frame_dt:
-			_record_accum = fmod(_record_accum, frame_dt)
-			bridge.push_recording_frame(data, false)
+	if need_record and bridge != null:
+		bridge.push_recording_frame(data, false)
 
 
 func capture_screenshot(params: Dictionary) -> Dictionary:
 	if output_viewport == null:
 		return {"ok": false, "error": "Output viewport unavailable"}
+	if _sequencer_busy or _screenshot_busy:
+		return {"ok": false, "error": "Capture already in progress"}
+	_screenshot_busy = true
 
 	var saved_out: Dictionary = bg_manager.output_to_dict() if bg_manager != null else {}
 	var override_needed := params.has("transparent") or params.has("width") or params.has("height")
@@ -92,6 +99,7 @@ func capture_screenshot(params: Dictionary) -> Dictionary:
 		if override_needed and bg_manager != null:
 			bg_manager.apply_output_viewport(saved_out)
 		_refresh_viewport_update_mode()
+		_screenshot_busy = false
 		return {"ok": false, "error": "Failed to read viewport image"}
 
 	var out_path := str(params.get("output_path", ""))
@@ -118,12 +126,15 @@ func capture_screenshot(params: Dictionary) -> Dictionary:
 	if override_needed and bg_manager != null:
 		bg_manager.apply_output_viewport(saved_out)
 	_refresh_viewport_update_mode()
+	_screenshot_busy = false
 	return result
 
 
 func start_recording(params: Dictionary) -> Dictionary:
 	if bridge == null:
 		return {"ok": false, "error": "VrmBridge unavailable"}
+	if output_viewport == null:
+		return {"ok": false, "error": "Output viewport unavailable"}
 	if recording_active:
 		return {"ok": false, "error": "Already recording"}
 

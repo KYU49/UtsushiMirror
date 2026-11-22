@@ -76,26 +76,29 @@ static func load_npz(path: String, clip_name: String = "") -> Dictionary:
 	elif arrays.has("pose_body") and arrays.has("root_orient"):
 		var ro: Dictionary = arrays["root_orient"]
 		var pb: Dictionary = arrays["pose_body"]
+		if ro.shape.size() != 2 or ro.shape[1] < 3 or pb.shape.size() != 2 or pb.shape[0] < ro.shape[0] or pb.shape[1] < 63:
+			return {"ok": false, "error": "root_orient / pose_body の形が想定外です: %s / %s" % [str(ro.shape), str(pb.shape)]}
 		n = ro.shape[0]
 		var ph = arrays.get("pose_hand", null)
-		joints = 22 + (30 if ph != null else 0)
-		hand_offset = 22 if ph != null else -1
+		var has_hands: bool = ph != null and ph.shape.size() == 2 and ph.shape[0] >= n and ph.shape[1] >= 90
+		joints = 22 + (30 if has_hands else 0)
+		hand_offset = 22 if has_hands else -1
 		poses.resize(n * joints * 3)
 		for i in n:
 			for c in 3:
-				poses[i * joints * 3 + c] = ro.data[i * 3 + c]
+				poses[i * joints * 3 + c] = ro.data[i * ro.shape[1] + c]
 			for c in 63:
-				poses[i * joints * 3 + 3 + c] = pb.data[i * 63 + c]
-			if ph != null:
+				poses[i * joints * 3 + 3 + c] = pb.data[i * pb.shape[1] + c]
+			if has_hands:
 				for c in 90:
-					poses[i * joints * 3 + 66 + c] = ph.data[i * 90 + c]
+					poses[i * joints * 3 + 66 + c] = ph.data[i * ph.shape[1] + c]
 	else:
 		return {"ok": false, "error": "SMPL 系のモーション (poses か root_orient + pose_body) が入っていません。入っているもの: %s" % ", ".join(arrays.keys())}
 	if n < 1 or joints < 22:
 		return {"ok": false, "error": "フレームか関節が足りません"}
 
 	var trans := PackedFloat64Array()
-	if arrays.has("trans") and arrays["trans"].shape.size() == 2 and arrays["trans"].shape[0] == n:
+	if arrays.has("trans") and arrays["trans"].shape.size() == 2 and arrays["trans"].shape[0] >= n and arrays["trans"].shape[1] >= 3:
 		trans = arrays["trans"].data
 
 	# 間引き
@@ -162,7 +165,13 @@ static func load_npz(path: String, clip_name: String = "") -> Dictionary:
 		s.times = times
 		s.values = vals
 		s.stride = 4
-		clip.bone_tracks[map[j]] = {"rest_local": Quaternion.IDENTITY, "parent_rest_world": Quaternion.IDENTITY, "sampler": s}
+		clip.bone_tracks[map[j]] = {
+			"rest_local": Quaternion.IDENTITY,
+			"rest_local_inv": Quaternion.IDENTITY,
+			"parent_rest_world": Quaternion.IDENTITY,
+			"parent_rest_world_inv": Quaternion.IDENTITY,
+			"sampler": s,
+		}
 
 	# 腰の位置: 最初のフレームの水平位置を原点、立ったときの高さを基準にした動きにする
 	if not trans.is_empty():
@@ -219,7 +228,7 @@ static func _parse_npy(b: PackedByteArray) -> Dictionary:
 	var header := b.slice(off, off + hlen).get_string_from_ascii()
 	var data_off := off + hlen
 	var descr := _header_value(header, "descr")
-	if header.find("'fortran_order': True") >= 0:
+	if _header_value(header, "fortran_order") == "True":
 		return {}
 	var shape_s := _header_value(header, "shape").replace("(", "").replace(")", "")
 	var shape: Array[int] = []
@@ -235,14 +244,23 @@ static func _parse_npy(b: PackedByteArray) -> Dictionary:
 		"<f8":
 			data = raw.to_float64_array()
 		"<f4":
-			for v in raw.to_float32_array():
-				data.append(v)
+			var src_f4 := raw.to_float32_array()
+			var n_f4 := mini(src_f4.size(), count)
+			data.resize(n_f4)
+			for idx in range(n_f4):
+				data[idx] = src_f4[idx]
 		"<i4":
-			for v in raw.to_int32_array():
-				data.append(v)
+			var src_i4 := raw.to_int32_array()
+			var n_i4 := mini(src_i4.size(), count)
+			data.resize(n_i4)
+			for idx in range(n_i4):
+				data[idx] = src_i4[idx]
 		"<i8":
-			for v in raw.to_int64_array():
-				data.append(v)
+			var src_i8 := raw.to_int64_array()
+			var n_i8 := mini(src_i8.size(), count)
+			data.resize(n_i8)
+			for idx in range(n_i8):
+				data[idx] = src_i8[idx]
 		_:
 			return {}
 	if data.size() < count:
@@ -252,12 +270,20 @@ static func _parse_npy(b: PackedByteArray) -> Dictionary:
 
 
 static func _header_value(header: String, key: String) -> String:
-	var i := header.find("'" + key + "':")
+	var i := header.find("'" + key + "'")
+	if i < 0:
+		i = header.find("\"" + key + "\"")
 	if i < 0:
 		return ""
-	var rest := header.substr(i + key.length() + 3).strip_edges()
-	if rest.begins_with("'"):
-		return rest.substr(1, rest.find("'", 1) - 1)
+	var colon := header.find(":", i + key.length() + 2)
+	if colon < 0:
+		return ""
+	var rest := header.substr(colon + 1).strip_edges()
+	if rest.begins_with("'") or rest.begins_with("\""):
+		var q := rest.substr(0, 1)
+		var end_q := rest.find(q, 1)
+		return rest.substr(1, end_q - 1) if end_q >= 1 else ""
 	if rest.begins_with("("):
-		return rest.substr(0, rest.find(")") + 1)
-	return rest.split(",")[0]
+		var end_p := rest.find(")")
+		return rest.substr(0, end_p + 1) if end_p >= 0 else ""
+	return rest.split(",")[0].strip_edges()

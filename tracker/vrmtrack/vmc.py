@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import socket
 import struct
+import sys
 import time
 
 
@@ -52,6 +53,7 @@ class VmcSender:
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._t0 = time.perf_counter()
+        self._send_err_logged = False
 
     def send(self, bones: dict, blends: dict, hips_pos=None) -> None:
         msgs = [osc_message("/VMC/Ext/OK", 1), osc_message("/VMC/Ext/T", time.perf_counter() - self._t0)]
@@ -67,7 +69,13 @@ class VmcSender:
             msgs.append(osc_message("/VMC/Ext/Blend/Apply"))
         # 1 パケットを小さく保つ (LAN 越し・Android 宛てでも分割されないように)
         for i in range(0, len(msgs), 12):
-            self.sock.sendto(osc_bundle(msgs[i:i + 12]), self.addr)
+            try:
+                self.sock.sendto(osc_bundle(msgs[i:i + 12]), self.addr)
+                self._send_err_logged = False
+            except OSError as e:
+                if not self._send_err_logged:
+                    print(f"[vmc] sendto error: {e}", file=sys.stderr, flush=True)
+                    self._send_err_logged = True
 
     def close(self) -> None:
         self.sock.close()

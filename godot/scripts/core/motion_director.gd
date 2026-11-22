@@ -488,7 +488,7 @@ func stop_walk() -> void:
 
 ## 歩くアニメーションの再生速度: アニメーション本来の歩く速さに、指定の速さを合わせる
 func _anim_rate(clip_name: String) -> float:
-	var clip = ctl.vrma_player.clips.get(clip_name)
+	var clip = ctl.vrma_player.get_clip(clip_name)
 	var dst_y: float = ctl.current_vrm.humanoid.hips_rest_height if ctl.current_vrm != null else 0.9
 	var natural := 1.1 * dst_y / 0.93  # 足踏みのアニメーションなら、ふつうの歩く速さとみなす
 	if clip != null and clip.hips_trans_sampler != null and clip.duration > 0.1:

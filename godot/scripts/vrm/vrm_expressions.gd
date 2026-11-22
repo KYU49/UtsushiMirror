@@ -28,6 +28,11 @@ var _mesh_morph_defaults: Array = [] # [{ mi: MeshInstance3D, count: int }]
 var _material_list: Array = [] # Array[Material] aligned with glTF material index
 var _material_base_colors: Dictionary = {} # mat_idx -> Color
 var _material_base_uv: Dictionary = {} # mat_idx -> {scale: Vector2, offset: Vector2}
+var _bound_mat_indices: Array[int] = []
+var _bound_morph_slots: Array = [] # [{mi: MeshInstance3D, index: int}]
+var _prev_effective: Dictionary = {}
+var _prev_result: Dictionary = {}
+var _applied_once: bool = false
 
 
 class ExpressionDef:
@@ -91,6 +96,32 @@ func setup(
 	var customs: Dictionary = expr_root.get("custom", {})
 	for cname in customs.keys():
 		_register_expr(str(cname), false, customs[cname], node_to_mesh_instances)
+
+	_bound_mat_indices.clear()
+	_bound_morph_slots.clear()
+	_prev_effective.clear()
+	_prev_result.clear()
+	_applied_once = false
+	var mat_seen: Dictionary = {}
+	var morph_seen: Dictionary = {}
+	for def: ExpressionDef in expressions.values():
+		for mb in def.morph_binds:
+			var mi: MeshInstance3D = mb["mi"]
+			var idx: int = int(mb["index"])
+			var mkey := "%d:%d" % [mi.get_instance_id(), idx]
+			if not morph_seen.has(mkey):
+				morph_seen[mkey] = true
+				_bound_morph_slots.append({"mi": mi, "index": idx})
+		for cb in def.color_binds:
+			var midx: int = int(cb["mat_idx"])
+			if not mat_seen.has(midx):
+				mat_seen[midx] = true
+				_bound_mat_indices.append(midx)
+		for tb in def.tex_binds:
+			var midx: int = int(tb["mat_idx"])
+			if not mat_seen.has(midx):
+				mat_seen[midx] = true
+				_bound_mat_indices.append(midx)
 
 	# Ensure all 18 official presets exist as queryable keys even if omitted
 	for pname in PRESET_NAMES:
@@ -238,14 +269,21 @@ func update(dt: float, lookat_expr_weights: Dictionary = {}, auto_blink_weight: 
 			w *= mouth_mul
 		effective[ename] = clampf(w, 0.0, 1.0)
 
-	# 4. Reset all morph targets & material expression overrides
-	for entry in _mesh_morph_defaults:
+	# 4. Skip GPU/blend-shape writes when effective weights have not changed since last frame
+	var changed := not _applied_once or _prev_effective.size() != effective.size()
+	if not changed:
+		for ename in effective.keys():
+			if not is_equal_approx(float(effective[ename]), float(_prev_effective.get(ename, -1.0))):
+				changed = true
+				break
+	if not changed:
+		return _prev_result
+
+	# Reset only bound morph slots (instead of every morph on every mesh)
+	for entry in _bound_morph_slots:
 		var mi: MeshInstance3D = entry["mi"]
-		if not is_instance_valid(mi):
-			continue
-		var cnt: int = entry["count"]
-		for bi in range(cnt):
-			mi.set_blend_shape_value(bi, 0.0)
+		if is_instance_valid(mi):
+			mi.set_blend_shape_value(int(entry["index"]), 0.0)
 
 	var mat_color_acc: Dictionary = {} # mat_idx -> {type -> Color}
 	var mat_uv_acc: Dictionary = {} # mat_idx -> {scale: Vector2, offset: Vector2}
@@ -284,8 +322,8 @@ func update(dt: float, lookat_expr_weights: Dictionary = {}, auto_blink_weight: 
 			mat_uv_acc[midx]["scale"] = cur_s.lerp(tb["scale"], w)
 			mat_uv_acc[midx]["offset"] = cur_o.lerp(tb["offset"], w)
 
-	# 6. Write material parameters back cleanly
-	for midx in range(_material_list.size()):
+	# 6. Write material parameters back cleanly (only expression-bound materials)
+	for midx in _bound_mat_indices:
 		var mat = _material_list[midx]
 		if mat == null:
 			continue
@@ -314,7 +352,10 @@ func update(dt: float, lookat_expr_weights: Dictionary = {}, auto_blink_weight: 
 			mat.uv1_scale = Vector3(base_uv["scale"].x * s_mul.x, base_uv["scale"].y * s_mul.y, 1.0)
 			mat.uv1_offset = Vector3(base_uv["offset"].x + o_add.x, base_uv["offset"].y + o_add.y, 0.0)
 
-	return {"lookat_mul": lookat_mul, "blink_mul": blink_mul, "mouth_mul": mouth_mul, "effective": effective}
+	_prev_effective = effective.duplicate()
+	_prev_result = {"lookat_mul": lookat_mul, "blink_mul": blink_mul, "mouth_mul": mouth_mul, "effective": effective}
+	_applied_once = true
+	return _prev_result
 
 
 static func _apply_override(cur: float, mode: String, weight: float) -> float:

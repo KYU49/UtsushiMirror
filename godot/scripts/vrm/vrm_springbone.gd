@@ -26,6 +26,9 @@ class ColliderDef:
 	var tail: Vector3 = Vector3.ZERO
 	var radius: float = 0.05
 	var normal: Vector3 = Vector3.UP
+	var w_p0: Vector3 = Vector3.ZERO
+	var w_p1: Vector3 = Vector3.ZERO
+	var w_normal: Vector3 = Vector3.UP
 
 
 class JointState:
@@ -213,6 +216,7 @@ func update(dt: float) -> void:
 	var clamped_dt := clampf(dt, 0.0, MAX_ACCUM_DT)
 	if clamped_dt <= 0.0:
 		return
+	_update_colliders()
 	_accum_dt += clamped_dt
 	var steps := 0
 	while _accum_dt >= FIXED_SUBSTEP and steps < 6:
@@ -225,10 +229,25 @@ func update(dt: float) -> void:
 		_accum_dt = 0.0
 
 
+func _update_colliders() -> void:
+	for i in range(colliders.size()):
+		var cdef: ColliderDef = colliders[i]
+		if cdef == null:
+			continue
+		var c_xf := _get_world_transform(cdef.node_ref)
+		cdef.w_p0 = c_xf * cdef.offset
+		if cdef.shape == "capsule" or cdef.shape == "capsuleInside":
+			cdef.w_p1 = c_xf * cdef.tail
+		elif cdef.shape == "plane":
+			cdef.w_normal = (c_xf.basis.orthonormalized() * cdef.normal).normalized()
+
+
 func _step_once(dt: float) -> void:
 	for chain: SpringChain in springs:
 		var center_xf := _get_center_transform(chain)
 		var center_inv := center_xf.affine_inverse()
+		var center_inv_basis := center_inv.basis.orthonormalized()
+		var center_inv_rot := center_inv_basis.get_rotation_quaternion()
 
 		for js: JointState in chain.joints:
 			var parent_world_xf := _get_parent_world_transform(js)
@@ -244,7 +263,7 @@ func _step_once(dt: float) -> void:
 			var parent_rot_world := parent_world_xf.basis.orthonormalized().get_rotation_quaternion()
 			var rest_rot_world := (parent_rot_world * js.rest_local_rot).normalized()
 			var world_bone_axis := rest_rot_world * js.bone_axis_local
-			var center_bone_axis := (center_inv.basis.orthonormalized() * world_bone_axis).normalized()
+			var center_bone_axis := (center_inv_basis * world_bone_axis).normalized()
 
 			# Inertia + Drag
 			var inertia := (js.current_tail - js.prev_tail) * (1.0 - js.drag_force)
@@ -252,7 +271,7 @@ func _step_once(dt: float) -> void:
 			var stiffness_force := center_bone_axis * (js.stiffness * stiffness_scale * dt)
 			# Gravity + external wind
 			var ext_world := (js.gravity_dir * js.gravity_power * gravity_scale + external_wind) * dt
-			var ext_center := center_inv.basis.orthonormalized() * ext_world
+			var ext_center := center_inv_basis * ext_world
 
 			var next_tail := js.current_tail + inertia + stiffness_force + ext_center
 
@@ -280,7 +299,7 @@ func _step_once(dt: float) -> void:
 
 			# Optional joint angle limit (cone / hinge)
 			if js.limit_type != "none":
-				next_tail = _apply_joint_limit(js, head_center, next_tail, center_inv, rest_rot_world)
+				next_tail = _apply_joint_limit(js, head_center, next_tail, center_inv_rot, rest_rot_world)
 
 			js.prev_tail = js.current_tail
 			js.current_tail = next_tail
@@ -295,10 +314,9 @@ func _step_once(dt: float) -> void:
 
 
 func _resolve_collider(cdef: ColliderDef, tail_world: Vector3, hit_radius: float) -> Vector3:
-	var c_xf := _get_world_transform(cdef.node_ref)
 	match cdef.shape:
 		"sphere":
-			var center := c_xf * cdef.offset
+			var center := cdef.w_p0
 			var r := cdef.radius + hit_radius
 			var d := tail_world - center
 			var dist := d.length()
@@ -307,33 +325,29 @@ func _resolve_collider(cdef: ColliderDef, tail_world: Vector3, hit_radius: float
 			elif dist <= 1e-6 and r > 0.0:
 				return center + Vector3.UP * r
 		"sphereInside":
-			var center := c_xf * cdef.offset
+			var center := cdef.w_p0
 			var r := maxf(cdef.radius - hit_radius, 0.0)
 			var d := tail_world - center
 			var dist := d.length()
 			if dist > r and dist > 1e-6:
 				return center + (d / dist) * r
 		"capsule":
-			var p0 := c_xf * cdef.offset
-			var p1 := c_xf * cdef.tail
-			var closest := _closest_point_segment(tail_world, p0, p1)
+			var closest := _closest_point_segment(tail_world, cdef.w_p0, cdef.w_p1)
 			var r := cdef.radius + hit_radius
 			var d := tail_world - closest
 			var dist := d.length()
 			if dist < r and dist > 1e-6:
 				return closest + (d / dist) * r
 		"capsuleInside":
-			var p0 := c_xf * cdef.offset
-			var p1 := c_xf * cdef.tail
-			var closest := _closest_point_segment(tail_world, p0, p1)
+			var closest := _closest_point_segment(tail_world, cdef.w_p0, cdef.w_p1)
 			var r := maxf(cdef.radius - hit_radius, 0.0)
 			var d := tail_world - closest
 			var dist := d.length()
 			if dist > r and dist > 1e-6:
 				return closest + (d / dist) * r
 		"plane":
-			var p := c_xf * cdef.offset
-			var n := (c_xf.basis.orthonormalized() * cdef.normal).normalized()
+			var p := cdef.w_p0
+			var n := cdef.w_normal
 			var signed_dist := (tail_world - p).dot(n)
 			if signed_dist < hit_radius:
 				return tail_world + n * (hit_radius - signed_dist)
@@ -344,12 +358,12 @@ func _apply_joint_limit(
 	js: JointState,
 	head_center: Vector3,
 	tail_center: Vector3,
-	center_inv: Transform3D,
+	center_inv_rot: Quaternion,
 	rest_rot_world: Quaternion
 ) -> Vector3:
 	var dir_center := (tail_center - head_center).normalized()
 	var limit_frame_world := (rest_rot_world * js.limit_offset).normalized()
-	var limit_frame_center := (center_inv.basis.orthonormalized().get_rotation_quaternion() * limit_frame_world).normalized()
+	var limit_frame_center := (center_inv_rot * limit_frame_world).normalized()
 	var ref_dir := (limit_frame_center * js.bone_axis_local).normalized()
 
 	if js.limit_type == "cone":

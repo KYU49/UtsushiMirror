@@ -336,5 +336,44 @@ ok &= check(f"腕の検出がちらついても腕は跳ねない (最大 {mx:.1
 mx, last = flicker_run("jump")
 ok &= check(f"姿勢推定の手首だけ飛んでも腕は手に合わせたまま (最大 {mx:.1f}°/フレーム)", mx < 4.0 and last[1] < -0.3)
 
+# ---- 数値安全性・設定エラー耐性・VMC
+from vrmtrack.mathq import frame as q_frame, q_from_matrix, q_slerp  # noqa: E402
+from vrmtrack.solver import _Euro  # noqa: E402
+from vrmtrack.vmc import _cap, osc_message  # noqa: E402
+
+v_rot = q_rot(q_axis_angle([0, 1, 0], math.pi * 0.5), np.array([0.0, 0.0, 1.0]))
+ok &= check("q_rot で Z軸が90度回転し +X になる", np.allclose(v_rot, [1.0, 0.0, 0.0], atol=1e-6))
+
+basis_col = q_frame(np.array([1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+ok &= check("collinear な frame 入力でも正規直交行列を返す", np.allclose(basis_col.T @ basis_col, np.eye(3), atol=1e-6))
+
+q_deg = q_from_matrix(np.diag([-1.0001, -1.0001, 1.0]))
+ok &= check("わずかに非直交な行列でも NaN/例外にならない", np.all(np.isfinite(q_deg)) and abs(np.linalg.norm(q_deg) - 1.0) < 1e-6)
+ok &= check("同一クォータニオンの slerp は有限", np.all(np.isfinite(q_slerp(np.array([0, 0, 0, 1.0]), np.array([0, 0, 0, 1.0]), 0.5))))
+
+cfg_bad = SolverConfig()
+cfg_bad.update({"smooth": "not_a_float", "calib_delay": "bad", "head_gain": float("nan")})
+ok &= check("不正な型や NaN の update は無視して維持する", cfg_bad.smooth == 0.85 and cfg_bad.head_gain == 1.0)
+
+eu = _Euro()
+eu.quat(np.array([0, 0, 0, 1.0]), 1.0 / 30, 1.0, 0.5)
+q_after_nan = eu.quat(np.array([float("nan"), 0, 0, 1.0]), 1.0 / 30, 1.0, 0.5)
+ok &= check("_Euro.quat は NaN を入れても壊れない", np.allclose(q_after_nan, [0, 0, 0, 1.0]))
+eu_v = _Euro()
+eu_v.value(0.5, 1.0 / 30, 1.0, 0.5)
+v_after_nan = eu_v.value(float("nan"), 1.0 / 30, 1.0, 0.5)
+ok &= check("_Euro.value は NaN を入れても壊れない", float(v_after_nan) == 0.5)
+
+sv_hip = Solver(SolverConfig(mirror=True, smooth=0.0, hips_move=True))
+sv_hip.solve(pose_world=body(True), pose_image=img_pose(0.45), t=0.0)
+ok &= check("未キャリブレーションの _solve_hips は calib.hip を書き換えない", sv_hip.calib.hip is None)
+sv_hip.cfg.mirror = False
+r_hip_flip = sv_hip.solve(pose_world=body(True), pose_image=img_pose(0.45), t=0.03)
+ok &= check("ミラー切替時に hips 基準が再初期化される", r_hip_flip.hips_pos is not None and abs(float(r_hip_flip.hips_pos[0])) < 1e-5)
+
+ok &= check("VMC 親指マッピング", _cap("leftThumbMetacarpal") == "LeftThumbProximal" and _cap("rightThumbProximal") == "RightThumbIntermediate")
+osc_pkt = osc_message("/VMC/Ext/OK", 1)
+ok &= check("OSC メッセージは4バイト境界", len(osc_pkt) % 4 == 0 and osc_pkt.startswith(b"/VMC/Ext/OK\x00"))
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

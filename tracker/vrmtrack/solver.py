@@ -144,7 +144,16 @@ class SolverConfig:
         for k, v in d.items():
             if hasattr(self, k):
                 cur = getattr(self, k)
-                setattr(self, k, bool(v) if isinstance(cur, bool) else type(cur)(v))
+                try:
+                    if isinstance(cur, bool):
+                        setattr(self, k, bool(v))
+                    else:
+                        val = type(cur)(v)
+                        if isinstance(val, float) and not math.isfinite(val):
+                            continue
+                        setattr(self, k, val)
+                except (ValueError, TypeError):
+                    continue
 
 
 @dataclass
@@ -199,20 +208,33 @@ class _Euro:
         return self.alpha(mc + beta * abs(self.speed), dt)
 
     def quat(self, q: np.ndarray, dt: float, mc: float, beta: float) -> np.ndarray:
+        q = np.asarray(q, dtype=float)
+        if not np.all(np.isfinite(q)):
+            return self.prev if self.prev is not None else IDENT.copy()
+        n = float(np.linalg.norm(q))
+        if n < 1e-12:
+            return self.prev if self.prev is not None else IDENT.copy()
+        q = q / n
         if self.prev is None:
             self.prev = q
             return q
         a = self._cut(q_angle(self.prev, q), dt, mc, beta)
-        self.prev = q_slerp(self.prev, q, a)
+        out = q_slerp(self.prev, q, a)
+        if np.all(np.isfinite(out)):
+            self.prev = out
         return self.prev
 
     def value(self, v, dt: float, mc: float, beta: float):
         v = np.asarray(v, dtype=float)
+        if not np.all(np.isfinite(v)):
+            return self.prev if self.prev is not None else np.zeros_like(v)
         if self.prev is None:
             self.prev = v
             return v
         a = self._cut(float(np.linalg.norm(v - self.prev)), dt, mc, beta)
-        self.prev = self.prev + a * (v - self.prev)
+        out = self.prev + a * (v - self.prev)
+        if np.all(np.isfinite(out)):
+            self.prev = out
         return self.prev
 
 
@@ -247,6 +269,8 @@ class Solver:
         self._img = None
         self.aspect = 16.0 / 9.0       # 画像の横/縦 (トラッカーが毎フレーム入れる)
         self._sh_base: list | None = None
+        self._hip_base: list | None = None
+        self._hip_base_mirror: bool | None = None
         self._sh_q: dict = {}
         self._chest_world = None
         self._inv0 = None
@@ -284,6 +308,7 @@ class Solver:
             c.gaze = np.mean(np.asarray(cap["gaze"]), axis=0).tolist()
         if cap.get("hip"):
             c.hip = np.mean(np.asarray(cap["hip"]), axis=0).tolist()
+            self._hip_base = None
         if cap.get("shoulder"):
             c.shoulder = np.mean(np.asarray(cap["shoulder"]), axis=0).tolist()
             self._sh_base = None
@@ -292,6 +317,9 @@ class Solver:
 
     def clear_calibration(self) -> None:
         self.calib = Calibration()
+        self._sh_base = None
+        self._hip_base = None
+        self._hip_base_mirror = None
 
     def _cal_q(self, key: str):
         q = getattr(self.calib, key)
@@ -374,7 +402,12 @@ class Solver:
         lh, rh = self._side(P_L_HIP, P_R_HIP)
         hips_ok = min(self._vis(w, lh), self._vis(w, rh)) > cfg.min_visibility
 
-        p = {i: self._pw(w[i]) for i in range(len(w))}
+        need_idx = {ls, rs, le, re, lw, rw, lh, rh}
+        if cfg.use_legs and hips_ok:
+            lk, rk = self._side(P_L_KNEE, P_R_KNEE)
+            la, ra = self._side(P_L_ANK, P_R_ANK)
+            need_idx.update((lk, rk, la, ra))
+        p = {i: self._pw(w[i]) for i in need_idx}
 
         def chest_of(pts) -> np.ndarray:
             sh_c = (pts[ls] + pts[rs]) * 0.5
@@ -418,8 +451,6 @@ class Solver:
 
         # 脚 (任意)
         if cfg.use_legs and hips_ok:
-            lk, rk = self._side(P_L_KNEE, P_R_KNEE)
-            la, ra = self._side(P_L_ANK, P_R_ANK)
             down = np.array([0.0, -1.0, 0.0])
             for side, h_i, k_i, a_i in (("left", lh, lk, la), ("right", rh, rk, ra)):
                 if min(self._vis(w, k_i), self._vis(w, a_i)) < cfg.min_visibility:
@@ -454,7 +485,8 @@ class Solver:
             if self._sh_base is None:
                 self._sh_base = list(cur)
             else:
-                self._sh_base = [b + (c - b) * 0.002 for b, c in zip(self._sh_base, cur)]
+                alpha_sh = 1.0 - math.exp(-self._dt * 0.06)
+                self._sh_base = [b + (c - b) * alpha_sh for b, c in zip(self._sh_base, cur)]
             base = self._sh_base
         dead = max(0.0, 0.03 + (0.5 - _clamp01(cfg.shoulder_sens)) * 0.06)
         for i, side in enumerate(("left", "right")):
@@ -508,9 +540,12 @@ class Solver:
         if sw < 0.02:
             return
         self._raw["hip"] = [float(hip[0]), float(hip[1]), sw]
-        base = self.calib.hip
+        base = self.calib.hip if (self.calib.hip and self.calib.mirror == self.cfg.mirror) else None
         if base is None:
-            base = self.calib.hip = [float(hip[0]), float(hip[1]), sw]  # 未補正なら最初の位置を基準に
+            if self._hip_base is None or self._hip_base_mirror != self.cfg.mirror:
+                self._hip_base = [float(hip[0]), float(hip[1]), sw]  # 未補正なら最初の位置を基準に (calib 自体は汚さない)
+                self._hip_base_mirror = self.cfg.mirror
+            base = self._hip_base
         x0, y0, sw0 = base
         k = SHOULDER_WIDTH_M / max(0.02, sw0)
         x = (hip[0] - x0) * k
@@ -831,6 +866,11 @@ class Solver:
     def _smooth(self, res: SolveResult, dt: float, held: set) -> SolveResult:
         s = max(0.0, min(0.95, self.cfg.smooth))
         if s <= 0.0:
+            for k, q in res.bones.items():
+                qv = np.asarray(q, dtype=float)
+                if np.all(np.isfinite(qv)):
+                    self._bone_f.setdefault(k, _Euro()).prev = qv
+                    self._stab[k] = qv
             self._last_out.update(res.bones)
             return res
         mc = 0.5 * 10 ** (1.3 * (1.0 - s))          # 止まっているときの遮断周波数 (Hz)

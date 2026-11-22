@@ -40,3 +40,31 @@ vv_cast_dark={
 "type": "float",
 "value": 0.0
 }
+vv_shade_shift={
+"type": "float",
+"value": 0.0
+}
+vv_toony_offset={
+"type": "float",
+"value": 0.0
+}
+vv_shade_strength={
+"type": "float",
+"value": 1.0
+}
+vv_shade_tint={
+"type": "vec3",
+"value": Vector3(1, 1, 1)
+}
+vv_ambient_color={
+"type": "vec3",
+"value": Vector3(0.902, 0.922, 0.961)
+}
+vv_ambient_energy={
+"type": "float",
+"value": 0.45
+}
+vv_time={
+"type": "float",
+"value": 0.0
+}

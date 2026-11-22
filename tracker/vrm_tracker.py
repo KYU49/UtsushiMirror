@@ -26,9 +26,11 @@ Webカメラから顔・手・全身を MediaPipe で推定し、VMC Protocol �
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import platform
+import shutil
 import socket
 import sys
 import threading
@@ -83,8 +85,16 @@ def ensure_model(key: str) -> str:
     if not path.exists():
         log(f"[tracker] モデルをダウンロード中: {fname}")
         tmp = path.with_suffix(".part")
-        urllib.request.urlretrieve(url, tmp)
-        tmp.replace(path)
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as out_f:
+                shutil.copyfileobj(resp, out_f)
+            tmp.replace(path)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
     return str(path)
 
 
@@ -130,9 +140,10 @@ def list_cameras(max_n: int = 8) -> list[dict]:
 
 
 def _frame_alive(cap) -> bool:
+    ok, f = False, None
     for _ in range(4):
         ok, f = cap.read()
-    return bool(ok) and f is not None and float(f.mean()) > 3.0
+    return bool(ok) and f is not None and float(f[::16, ::16].mean()) > 3.0
 
 
 def pick_camera(spec: str, width: int, height: int, fps: int = 30):
@@ -159,7 +170,7 @@ class Grabber(threading.Thread):
         self.frame = None
         self.seq = 0
         self.cam_fps = 0.0
-        self.lock = threading.Lock()
+        self.cond = threading.Condition()
         self.running = True
 
     def run(self) -> None:
@@ -169,23 +180,29 @@ class Grabber(threading.Thread):
             if not ok:
                 time.sleep(0.01)
                 continue
-            with self.lock:
+            with self.cond:
                 self.frame = f
                 self.seq += 1
+                self.cond.notify_all()
             n += 1
             if n >= 30:
                 now = time.perf_counter()
                 self.cam_fps = n / max(1e-6, now - t)
                 n, t = 0, now
 
-    def latest(self, last_seq: int):
-        with self.lock:
+    def wait_latest(self, last_seq: int, timeout: float = 0.05):
+        with self.cond:
+            if self.seq == last_seq and self.running:
+                self.cond.wait(timeout=timeout)
             if self.seq == last_seq or self.frame is None:
                 return None, last_seq
             return self.frame, self.seq
 
     def stop(self) -> None:
-        self.running = False
+        with self.cond:
+            self.running = False
+            self.frame = None
+            self.cond.notify_all()
 
 
 class Control:
@@ -225,6 +242,14 @@ class Control:
             except OSError:
                 pass
 
+    def close(self) -> None:
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
 
 def load_json(path: str) -> dict:
     try:
@@ -256,10 +281,16 @@ class WireView:
         self.mirror = mirror
         V = mp.tasks.vision
         self.pose_conn = [(c.start, c.end) for c in V.PoseLandmarksConnections.POSE_LANDMARKS]
+        self.body_conn = [c for c in self.pose_conn if c[0] > 10 and c[1] > 10]
         self.hand_conn = [(c.start, c.end) for c in V.HandLandmarksConnections.HAND_CONNECTIONS]
         F = V.FaceLandmarksConnections
         self.face_conn = [(c.start, c.end) for c in F.FACE_LANDMARKS_CONTOURS]
         self.iris_conn = [(c.start, c.end) for c in (F.FACE_LANDMARKS_LEFT_IRIS + F.FACE_LANDMARKS_RIGHT_IRIS)]
+        self._bg = np.full((self.h, self.w, 3), DARK, dtype=np.uint8)
+        for x in range(0, self.w, 40):
+            cv2.line(self._bg, (x, 0), (x, self.h), (30, 26, 23), 1)
+        for y in range(0, self.h, 40):
+            cv2.line(self._bg, (0, y), (self.w, y), (30, 26, 23), 1)
         cv2.namedWindow(WIN_TITLE, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WIN_TITLE, self.w, self.h)
 
@@ -273,18 +304,12 @@ class WireView:
                 cv2.line(img, self._pt(lms[a]), self._pt(lms[b]), color, th, cv2.LINE_AA)
 
     def draw(self, pose, hands, face, fps: float, status: str, overlay: str = "") -> bool:
-        img = np.zeros((self.h, self.w, 3), dtype=np.uint8)
-        img[:] = DARK
-        # 背景グリッド
-        for x in range(0, self.w, 40):
-            cv2.line(img, (x, 0), (x, self.h), (30, 26, 23), 1)
-        for y in range(0, self.h, 40):
-            cv2.line(img, (0, y), (self.w, y), (30, 26, 23), 1)
+        img = self._bg.copy()
         if face is not None:
             self._lines(img, face, self.face_conn, GREY, 1)
             self._lines(img, face, self.iris_conn, RED_HI, 1)
         if pose is not None:
-            self._lines(img, pose, [c for c in self.pose_conn if c[0] > 10 and c[1] > 10], RED, 3)
+            self._lines(img, pose, self.body_conn, RED, 3)
             for i, lm in enumerate(pose):
                 if i > 10 and (getattr(lm, "visibility", 1.0) or 0) > 0.5:
                     cv2.circle(img, self._pt(lm), 4, WHITE, -1, cv2.LINE_AA)
@@ -404,6 +429,9 @@ def main() -> int:
     grab = Grabber(cap)
     grab.start()
 
+    n_models = sum(1 for m in (pose_lm, face_lm, hand_lm) if m is not None)
+    executor = ThreadPoolExecutor(max_workers=n_models) if n_models > 1 else None
+
     t0 = time.perf_counter()
     last_ts = -1
     last_seq = 0
@@ -425,13 +453,20 @@ def main() -> int:
                     if view is not None:
                         view.mirror = cfg.mirror
                 elif cmd == "calibrate":
-                    calib_at = time.perf_counter() + max(0.0, float(msg.get("delay", 3.0)))
+                    try:
+                        delay = max(0.0, float(msg.get("delay", 3.0)))
+                    except (ValueError, TypeError):
+                        delay = 3.0
+                    calib_at = time.perf_counter() + delay
                     last_msg = "calibrating"
                 elif cmd == "reset_calibration":
                     solver.clear_calibration()
                     calib_at = 0.0
                     if args.calib_file and os.path.exists(args.calib_file):
-                        os.remove(args.calib_file)
+                        try:
+                            os.remove(args.calib_file)
+                        except OSError:
+                            pass
                     last_msg = "calibration cleared"
                 elif cmd == "stop":
                     raise KeyboardInterrupt
@@ -446,9 +481,8 @@ def main() -> int:
                     "calib_capturing": solver.capturing, "message": last_msg,
                 })
 
-            frame, seq = grab.latest(last_seq)
+            frame, seq = grab.wait_latest(last_seq, timeout=0.05)
             if frame is None:
-                time.sleep(0.003)
                 continue
             last_seq = seq
             ts = int((time.perf_counter() - t0) * 1000)
@@ -456,7 +490,7 @@ def main() -> int:
                 ts = last_ts + 1
             last_ts = ts
             if frames % 15 == 0:
-                brightness = float(cv2.cvtColor(cv2.resize(frame, (64, 36)), cv2.COLOR_BGR2GRAY).mean())
+                brightness = float(cv2.cvtColor(frame[::16, ::16], cv2.COLOR_BGR2GRAY).mean())
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             solver.aspect = frame.shape[1] / max(1, frame.shape[0])  # 画像の横/縦 (腕の推定で縦横の長さをそろえる)
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -465,23 +499,30 @@ def main() -> int:
             pose_w = pose_i = face_pts = None
             face_in = None
             hands_in, hands_draw = [], []
-            if pose_lm is not None:
-                r = pose_lm.detect_for_video(image, ts)
-                if r.pose_landmarks:
-                    pose_i = r.pose_landmarks[0]
-                    pose_w = r.pose_world_landmarks[0]
-            if face_lm is not None:
-                r = face_lm.detect_for_video(image, ts)
-                if r.face_landmarks:
-                    face_pts = r.face_landmarks[0]
-                    bs = {c.category_name: c.score for c in (r.face_blendshapes[0] if r.face_blendshapes else [])}
-                    mat = r.facial_transformation_matrixes[0] if r.facial_transformation_matrixes else None
-                    face_in = {"matrix": mat, "blendshapes": bs}
-            if hand_lm is not None:
-                r = hand_lm.detect_for_video(image, ts)
-                for i, lms in enumerate(r.hand_landmarks or []):
+            if executor is not None:
+                f_pose = executor.submit(pose_lm.detect_for_video, image, ts) if pose_lm is not None else None
+                f_face = executor.submit(face_lm.detect_for_video, image, ts) if face_lm is not None else None
+                f_hand = executor.submit(hand_lm.detect_for_video, image, ts) if hand_lm is not None else None
+                r_pose = f_pose.result() if f_pose is not None else None
+                r_face = f_face.result() if f_face is not None else None
+                r_hand = f_hand.result() if f_hand is not None else None
+            else:
+                r_pose = pose_lm.detect_for_video(image, ts) if pose_lm is not None else None
+                r_face = face_lm.detect_for_video(image, ts) if face_lm is not None else None
+                r_hand = hand_lm.detect_for_video(image, ts) if hand_lm is not None else None
+
+            if r_pose is not None and r_pose.pose_landmarks:
+                pose_i = r_pose.pose_landmarks[0]
+                pose_w = r_pose.pose_world_landmarks[0]
+            if r_face is not None and r_face.face_landmarks:
+                face_pts = r_face.face_landmarks[0]
+                bs = {c.category_name: c.score for c in (r_face.face_blendshapes[0] if r_face.face_blendshapes else [])}
+                mat = r_face.facial_transformation_matrixes[0] if r_face.facial_transformation_matrixes else None
+                face_in = {"matrix": mat, "blendshapes": bs}
+            if r_hand is not None:
+                for i, lms in enumerate(r_hand.hand_landmarks or []):
                     hands_draw.append(lms)
-                    hands_in.append((lms, r.hand_world_landmarks[i]))
+                    hands_in.append((lms, r_hand.hand_world_landmarks[i]))
             del frame, rgb, image
             det = {"face": face_in is not None, "hands": len(hands_in), "pose": pose_w is not None}
 
@@ -528,8 +569,17 @@ def main() -> int:
     finally:
         grab.stop()
         grab.join(timeout=1.0)
+        if executor is not None:
+            executor.shutdown(wait=True)
+        for lm in (face_lm, hand_lm, pose_lm):
+            if lm is not None:
+                try:
+                    lm.close()
+                except Exception:
+                    pass
         cap.release()
         sender.close()
+        control.close()
         cv2.destroyAllWindows()
     log("[tracker] stopped")
     return 0

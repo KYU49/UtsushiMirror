@@ -119,6 +119,34 @@ vec3 kuwahara_soft(vec2 uv, vec2 px, float k, vec3 orig) {
 void fragment() {
 	vec2 px = SCREEN_PIXEL_SIZE;
 	vec4 src = textureLod(screen_tex, SCREEN_UV, 0.0);
+	vec3 base = src.rgb;
+	float posterize_fw = posterize >= 2.0 ? fwidth(luma(base) * posterize) : 0.0;
+
+	bool in_bar = false;
+	if (letterbox > 0.0) {
+		float aspect = px.y / px.x;
+		if (aspect < letterbox) {
+			float f = aspect / letterbox;
+			in_bar = abs(SCREEN_UV.y - 0.5) > f * 0.5;
+		} else {
+			float f = letterbox / aspect;
+			in_bar = abs(SCREEN_UV.x - 0.5) > f * 0.5;
+		}
+	}
+
+	bool empty = protect_clear && max(max(base.r, base.g), base.b) < 0.5 / 255.0;
+	if (in_bar) {
+		COLOR = vec4(0.0, 0.0, 0.0, 1.0);
+	} else if (empty) {
+#if defined(VV_PASS_MIX)
+		COLOR = vec4(base, 1.0);
+#elif defined(VV_PASS_MUL)
+		COLOR = vec4(1.0);
+#else
+		COLOR = vec4(0.0);
+#endif
+	} else {
+
 	float frame_t = floor(TIME * grain_fps);
 	vec2 uv = SCREEN_UV;
 
@@ -199,7 +227,7 @@ void fragment() {
 	if (posterize >= 2.0) {
 		float l0 = max(luma(col), 1e-4);
 		float y = l0 * posterize - 0.5;
-		float w = clamp(fwidth(y) * 1.5, 0.12, 0.45);
+		float w = clamp(posterize_fw * 1.5, 0.12, 0.45);
 		float lq = (floor(y) + smoothstep(0.5 - w, 0.5 + w, fract(y)) + 0.5) / posterize;
 		// 暗い所を何倍にも持ち上げると色が飛ぶ (目が赤くなる等) ので、倍率は 0.7〜1.2 に収める
 		col *= mix(1.0, clamp(lq / l0, 0.7, 1.2), 0.85);
@@ -249,41 +277,18 @@ void fragment() {
 
 	col = clamp(col, 0.0, 1.0);
 	vec3 out_col = mix(src.rgb, col, strength);
-	float bar = 0.0;
-
-	// 映画の帯 (縦横比を合わせる黒帯)
-	if (letterbox > 0.0) {
-		float aspect = px.y / px.x;
-		if (aspect < letterbox) {
-			float f = aspect / letterbox;
-			if (abs(SCREEN_UV.y - 0.5) > f * 0.5) { out_col = vec3(0.0); bar = 1.0; }
-		} else {
-			float f = letterbox / aspect;
-			if (abs(SCREEN_UV.x - 0.5) > f * 0.5) { out_col = vec3(0.0); bar = 1.0; }
-		}
-	}
-	vec3 base = src.rgb;
-	bool empty = protect_clear && max(max(base.r, base.g), base.b) < 0.5 / 255.0;
-#if defined(VV_PASS_MUL)
+#if defined(VV_PASS_MIX)
+	COLOR = vec4(out_col, 1.0);
+#elif defined(VV_PASS_MUL)
 	// 暗くする分: m = 効果後 / 元 (1 以下)。8bit に切り捨てて、足りない分は 2 回目で足す
-	vec3 m = vec3(1.0);
-	if (bar > 0.5) {
-		m = vec3(0.0);
-	} else if (!empty) {
-		m = clamp(out_col / max(base, vec3(1e-4)), 0.0, 1.0);
-		m = floor(m * 255.0) / 255.0;
-	}
+	vec3 m = clamp(out_col / max(base, vec3(1e-4)), 0.0, 1.0);
+	m = floor(m * 255.0) / 255.0;
 	COLOR = vec4(m, 1.0);
 #else
-	// 明るくする分を足す (アルファ 0 の premul 合成 = 加算でアルファ不変)。黒帯だけは不透明で上書き
-	if (bar > 0.5) {
-		COLOR = vec4(0.0, 0.0, 0.0, 1.0);
-	} else if (empty) {
-		COLOR = vec4(0.0);
-	} else {
-		vec3 m = clamp(out_col / max(base, vec3(1e-4)), 0.0, 1.0);
-		m = floor(m * 255.0) / 255.0;
-		COLOR = vec4(max(out_col - base * m, vec3(0.0)), 0.0);
-	}
+	// 明るくする分を足す (アルファ 0 の premul 合成 = 加算でアルファ不変)
+	vec3 m = clamp(out_col / max(base, vec3(1e-4)), 0.0, 1.0);
+	m = floor(m * 255.0) / 255.0;
+	COLOR = vec4(max(out_col - base * m, vec3(0.0)), 0.0);
 #endif
+	}
 }

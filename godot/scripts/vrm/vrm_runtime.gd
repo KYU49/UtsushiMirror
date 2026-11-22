@@ -81,9 +81,7 @@ func step(dt: float) -> void:
 	deterministic_time += dt
 
 	# Update MToon UV animation uniform deterministically
-	for mat in materials:
-		if mat is ShaderMaterial:
-			mat.set_shader_parameter("u_time", deterministic_time)
+	RenderingServer.global_shader_parameter_set("vv_time", deterministic_time)
 
 	# 1. Reset pose and compose Animation -> Procedural Idle -> Direct Bone / VMC overrides
 	humanoid.reset_to_rest_pose()
@@ -177,8 +175,14 @@ func step(dt: float) -> void:
 		# Re-apply bone LookAt attenuated if overrideLookAt blocked/blended eye bones
 		var lookat_mul: float = float(expr_res.get("lookat_mul", 1.0))
 		if lookat != null and lookat.lookat_type == "bone" and lookat_mul < 0.999 and not tracked_eyes:
-			var tgt2: Vector3 = lookat.manual_target if lookat.mode == "manual" else lookat_world_target
-			lookat.compute_and_apply(humanoid, tgt2, has_lookat_target or lookat.mode == "manual", lookat_mul)
+			if force_camera_gaze:
+				var saved_mode2: String = lookat.mode
+				lookat.mode = "camera"
+				lookat.compute_and_apply(humanoid, lookat_world_target, true, lookat_mul)
+				lookat.mode = saved_mode2
+			else:
+				var tgt2: Vector3 = lookat.manual_target if lookat.mode == "manual" else lookat_world_target
+				lookat.compute_and_apply(humanoid, tgt2, has_lookat_target or lookat.mode == "manual", lookat_mul)
 
 	# 5. SpringBone
 	if spring_bone != null:

@@ -13,6 +13,7 @@ class VrmaSampler:
 	var values: PackedFloat32Array # flat floats: 3 per key for VEC3, 4 per key for VEC4 (3x for CUBICSPLINE)
 	var stride: int = 4 # 3 or 4
 	var interpolation: String = "LINEAR" # "LINEAR" | "STEP" | "CUBICSPLINE"
+	var _last_idx: int = 0
 
 	func sample_vec3(t: float) -> Vector3:
 		if times.is_empty():
@@ -96,17 +97,29 @@ class VrmaSampler:
 			return q0.slerp(q1, alpha).normalized()
 
 	func _find_segment(t: float) -> int:
-		var lo := 0
 		var hi := times.size() - 2
+		if hi <= 0:
+			_last_idx = 0
+			return 0
+		var li := _last_idx
+		if li >= 0 and li <= hi:
+			if times[li] <= t and t < times[li + 1]:
+				return li
+			if li + 1 <= hi and times[li + 1] <= t and t < times[li + 2]:
+				_last_idx = li + 1
+				return _last_idx
+		var lo := 0
 		while lo <= hi:
 			var mid := (lo + hi) >> 1
 			if times[mid] <= t:
 				if t < times[mid + 1]:
+					_last_idx = mid
 					return mid
 				lo = mid + 1
 			else:
 				hi = mid - 1
-		return clampi(lo, 0, times.size() - 2)
+		_last_idx = clampi(lo, 0, times.size() - 2)
+		return _last_idx
 
 
 class VrmaClip:
@@ -116,7 +129,7 @@ class VrmaClip:
 	var src_hips_rest_y: float = 0.9
 	var src_hips_rest_pos: Vector3 = Vector3(0.0, 0.9, 0.0)
 	var hips_trans_sampler: VrmaSampler = null
-	# human_bone_name -> { rest_local: Quaternion, parent_rest_world: Quaternion, sampler: VrmaSampler }
+	# human_bone_name -> { rest_local, rest_local_inv, parent_rest_world, parent_rest_world_inv, sampler }
 	var bone_tracks: Dictionary = {}
 	# expr_name -> VrmaSampler (translation.x)
 	var expr_tracks: Dictionary = {}
@@ -128,9 +141,10 @@ class VrmaClip:
 			var tr: Dictionary = bone_tracks[bname]
 			var samp: VrmaSampler = tr["sampler"]
 			var q_pose_local: Quaternion = samp.sample_quat(time_sec)
-			var q_rest_local: Quaternion = tr["rest_local"]
+			var q_rest_inv: Quaternion = tr["rest_local_inv"] if tr.has("rest_local_inv") else (tr["rest_local"] as Quaternion).inverse()
 			var q_parent_world: Quaternion = tr["parent_rest_world"]
-			var norm_rot: Quaternion = (q_parent_world * (q_pose_local * q_rest_local.inverse()) * q_parent_world.inverse()).normalized()
+			var q_parent_inv: Quaternion = tr["parent_rest_world_inv"] if tr.has("parent_rest_world_inv") else q_parent_world.inverse()
+			var norm_rot: Quaternion = (q_parent_world * (q_pose_local * q_rest_inv) * q_parent_inv).normalized()
 			bones[bname] = norm_rot
 
 		var hips_delta := Vector3.ZERO
@@ -161,6 +175,7 @@ class VrmaClip:
 
 class VrmaPlayer:
 	var clips: Dictionary = {} # name -> VrmaClip
+	var clip_loaders: Dictionary = {} # name -> Callable -> VrmaClip?
 	var current_clip: VrmaClip = null
 	var current_name: String = ""
 	var time_sec: float = 0.0
@@ -188,25 +203,52 @@ class VrmaPlayer:
 	const BLEND_MAX_SEC := 1.0
 
 	func add_clip(clip_name: String, clip: VrmaClip) -> void:
+		clip_loaders.erase(clip_name)
 		clips[clip_name] = clip
 
+	func register_lazy_clip(clip_name: String, loader: Callable) -> void:
+		clips.erase(clip_name)
+		clip_loaders[clip_name] = loader
+
+	func erase_clip(clip_name: String) -> void:
+		clips.erase(clip_name)
+		clip_loaders.erase(clip_name)
+
 	func has_clip(clip_name: String) -> bool:
-		return clips.has(clip_name)
+		return clips.has(clip_name) or clip_loaders.has(clip_name)
+
+	func get_clip(clip_name: String) -> VrmaClip:
+		if clips.has(clip_name):
+			return clips[clip_name]
+		if clip_loaders.has(clip_name):
+			var loader: Callable = clip_loaders[clip_name]
+			clip_loaders.erase(clip_name)
+			var clip = loader.call() if loader.is_valid() else null
+			if clip is VrmaClip:
+				clips[clip_name] = clip
+				return clip
+		return null
 
 	func get_clip_names() -> Array[String]:
-		var out: Array[String] = []
+		var seen: Dictionary = {}
 		for k in clips.keys():
-			out.append(str(k))
+			seen[str(k)] = true
+		for k in clip_loaders.keys():
+			seen[str(k)] = true
+		var out: Array[String] = []
+		for k in seen.keys():
+			out.append(k)
 		out.sort()
 		return out
 
 	func play(clip_name: String, p_looping: bool = true, p_speed: float = 1.0, blend_sec: float = 0.25) -> bool:
-		if not clips.has(clip_name):
+		var target_clip := get_clip(clip_name)
+		if target_clip == null:
 			return false
 		if playing and not _last_pose.is_empty() and blend_sec > 0.001:
 			_prev_pose = _last_pose.duplicate(true)
 			# 次の動きの最初の姿勢が今の姿勢から大きく違うほど、ゆっくりつなぐ
-			var first: Dictionary = clips[clip_name].evaluate(0.0, _last_dst_y)
+			var first: Dictionary = target_clip.evaluate(0.0, _last_dst_y)
 			_blend_duration = auto_blend_sec(blend_sec, pose_distance_deg(_last_pose, first))
 			_blend_elapsed = 0.0
 		else:
@@ -214,7 +256,7 @@ class VrmaPlayer:
 			_blend_duration = 0.0
 			_blend_elapsed = 0.0
 
-		current_clip = clips[clip_name]
+		current_clip = target_clip
 		current_name = clip_name
 		time_sec = 0.0
 		looping = p_looping
@@ -430,9 +472,12 @@ static func load_vrma(path: String, bridge: Node = null, clip_name: String = "")
 			if node_trans_samplers.has(gnode):
 				clip.hips_trans_sampler = node_trans_samplers[gnode]
 		if node_rot_samplers.has(gnode):
+			var q_rest_local: Quaternion = rest_local_rot[gnode]
 			clip.bone_tracks[str(bname)] = {
-				"rest_local": rest_local_rot[gnode],
+				"rest_local": q_rest_local,
+				"rest_local_inv": q_rest_local.inverse(),
 				"parent_rest_world": p_world_rot,
+				"parent_rest_world_inv": p_world_rot.inverse(),
 				"sampler": node_rot_samplers[gnode],
 			}
 
@@ -524,6 +569,10 @@ static func _read_accessor_floats(gltf_json: Dictionary, bin: PackedByteArray, a
 		byte_stride = default_stride
 
 	var normalized := bool(acc.get("normalized", false))
+	if comp_type == 5126 and byte_stride == default_stride and count > 0:
+		var end_off := byte_offset + count * comps * 4
+		if byte_offset >= 0 and end_off <= bin.size():
+			return bin.slice(byte_offset, end_off).to_float32_array()
 	out.resize(count * comps)
 	for i in range(count):
 		var base := byte_offset + i * byte_stride

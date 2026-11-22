@@ -8,9 +8,9 @@ extends RefCounted
 ##   プリセット = シェーダーの値の組み合わせ。細かい値を変えると style は "custom" になる。
 ## モデルの陰影: 読み込んだ VRM の MToon マテリアルすべてに vv_* の値を入れる。
 
+const SHADER_MIX := preload("res://shaders/post_effects_mix.gdshader")
 const SHADER_MUL := preload("res://shaders/post_effects_mul.gdshader")
 const SHADER_ADD := preload("res://shaders/post_effects_add.gdshader")
-const MTOON_SHADER_HINT := "mtoon10"
 
 ## シェーダーの値の既定 (= 何もしない)
 const NEUTRAL := {
@@ -66,8 +66,8 @@ const SHADE_DEFAULTS := {
 var shade: Dictionary = SHADE_DEFAULTS.duplicate()
 
 var _layers: Array[CanvasLayer] = []
-## [マテリアル, そのマテリアルを描くビューポート]
-var _mats: Array = []
+## [{layer: CanvasLayer, vp: Viewport, rect_mix: ColorRect, mat_mix: ShaderMaterial, rect_mul: ColorRect, mat_mul: ShaderMaterial, rect_add: ColorRect, mat_add: ShaderMaterial}]
+var _entries: Array = []
 
 
 ## 画面効果を描く層を、メイン画面と出力ビューポートに 1 枚ずつ作る。
@@ -78,18 +78,22 @@ func attach(parent: Node, output_viewport: SubViewport) -> void:
 		var layer := CanvasLayer.new()
 		layer.name = "PostEffectLayer"
 		layer.layer = 5  # 3D と背景の上、案内表示 (layer 10) の下
-		# 同じ層の中で 乗算 → 加算 の順に描く (画面の写しは最初の 1 回だけなので、2 枚とも元の画面を読む)
-		for sh in [SHADER_MUL, SHADER_ADD]:
+		var vp: Viewport = target if target is Viewport else (target as Node).get_viewport()
+		var entry := {"layer": layer, "vp": vp}
+		for item in [["mix", SHADER_MIX], ["mul", SHADER_MUL], ["add", SHADER_ADD]]:
+			var key: String = item[0]
 			var mat := ShaderMaterial.new()
-			mat.shader = sh
+			mat.shader = item[1]
 			var rect := ColorRect.new()
 			rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 			rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			rect.material = mat
 			layer.add_child(rect)
-			_mats.append([mat, target if target is Viewport else (target as Node).get_viewport()])
+			entry["rect_" + key] = rect
+			entry["mat_" + key] = mat
 		target.add_child(layer)
 		_layers.append(layer)
+		_entries.append(entry)
 	_apply()
 
 
@@ -123,6 +127,7 @@ func apply_params(d: Dictionary) -> void:
 
 func reset_shade() -> void:
 	shade = SHADE_DEFAULTS.duplicate()
+	apply_shade_to()
 
 
 func is_active() -> bool:
@@ -139,58 +144,45 @@ func _apply() -> void:
 	for layer in _layers:
 		if is_instance_valid(layer):
 			layer.visible = active
-	for pair in _mats:
-		var mat: ShaderMaterial = pair[0]
-		mat.set_shader_parameter("strength", strength)
-		for k in params.keys():
-			var v = params[k]
-			if typeof(NEUTRAL[k]) == TYPE_STRING:
-				v = Color(str(v))
-			mat.set_shader_parameter(k, v)
+	if not active:
+		apply_shade_to()
+		return
+	var converted := {}
+	for k in params.keys():
+		var v = params[k]
+		if typeof(NEUTRAL[k]) == TYPE_STRING:
+			v = Color(str(v))
+		converted[k] = v
+	for entry in _entries:
+		for mat in [entry["mat_mix"], entry["mat_mul"], entry["mat_add"]]:
+			var sm: ShaderMaterial = mat
+			sm.set_shader_parameter("strength", strength)
+			for k in converted.keys():
+				sm.set_shader_parameter(k, converted[k])
 	refresh_transparency()
+	apply_shade_to()
 
 
 ## 透過の画面では、何も描かれていない所に色を足さない (背景の透過・ウィンドウ透過の切り替え時に呼ぶ)。
 func refresh_transparency() -> void:
-	for pair in _mats:
-		var vp: Viewport = pair[1]
+	for entry in _entries:
+		var vp: Viewport = entry["vp"]
 		var trans := is_instance_valid(vp) and vp.transparent_bg
-		(pair[0] as ShaderMaterial).set_shader_parameter("protect_clear", trans)
+		(entry["rect_mix"] as ColorRect).visible = not trans
+		(entry["rect_mul"] as ColorRect).visible = trans
+		(entry["rect_add"] as ColorRect).visible = trans
+		(entry["mat_mix"] as ShaderMaterial).set_shader_parameter("protect_clear", false)
+		(entry["mat_mul"] as ShaderMaterial).set_shader_parameter("protect_clear", trans)
+		(entry["mat_add"] as ShaderMaterial).set_shader_parameter("protect_clear", trans)
 
 
-## モデルの MToon マテリアルに陰影の調整を入れる (読み込み直後と変更時に呼ぶ)。
-func apply_shade_to(root: Node) -> void:
-	if root == null:
-		return
+## モデルの MToon マテリアルに陰影の調整を入れる (グローバルシェーダーパラメータを更新)。
+func apply_shade_to(_root: Node = null) -> void:
 	var tint := Color(str(shade.shade_tint))
-	for mat in _mtoon_materials(root):
-		mat.set_shader_parameter("vv_shade_shift", float(shade.shade_shift))
-		mat.set_shader_parameter("vv_toony_offset", float(shade.shade_toony))
-		mat.set_shader_parameter("vv_shade_strength", float(shade.shade_strength))
-		mat.set_shader_parameter("vv_shade_tint", Vector3(tint.r, tint.g, tint.b))
-
-
-func _mtoon_materials(root: Node) -> Array:
-	var out: Array = []
-	var seen := {}
-	var stack: Array = [root]
-	while not stack.is_empty():
-		var n: Node = stack.pop_back()
-		stack.append_array(n.get_children())
-		if not (n is MeshInstance3D):
-			continue
-		var mi := n as MeshInstance3D
-		if mi.mesh == null:
-			continue
-		for s in mi.mesh.get_surface_count():
-			var m: Material = mi.get_surface_override_material(s)
-			if m == null:
-				m = mi.mesh.surface_get_material(s)
-			if m is ShaderMaterial and m.shader != null and MTOON_SHADER_HINT in str(m.shader.resource_path) \
-					and not ("outline" in str(m.shader.resource_path)) and not seen.has(m):
-				seen[m] = true
-				out.append(m)
-	return out
+	RenderingServer.global_shader_parameter_set("vv_shade_shift", float(shade.shade_shift))
+	RenderingServer.global_shader_parameter_set("vv_toony_offset", float(shade.shade_toony))
+	RenderingServer.global_shader_parameter_set("vv_shade_strength", float(shade.shade_strength))
+	RenderingServer.global_shader_parameter_set("vv_shade_tint", Vector3(tint.r, tint.g, tint.b))
 
 
 func to_dict() -> Dictionary:

@@ -58,6 +58,9 @@ var _last_lookat_manual_target: Vector3 = Vector3(0.0, 1.4, 2.0)
 var _last_first_person: bool = false
 var _shutting_down: bool = false
 var tracking = TrackingManagerScript.new()
+var _manual_expr_overrides: Dictionary = {} # ename -> true (UI/hotkey で固定中の表情)
+
+const VMC_AUTO_EMOTION_KEYS := {"happy": true, "angry": true, "surprised": true, "sad": true, "relaxed": true}
 var post_effects = PostEffectsScript.new()
 var _last_vmc_msec: int = 0
 var _spring_enabled: bool = true
@@ -67,6 +70,7 @@ var _direct_bone_euler_deg: Dictionary = {}
 var _cfg_settings_visible: bool = true
 
 var _overlay_layer: CanvasLayer = null
+var _toast_layer: CanvasLayer = null
 var _overlay_error_lbl: Label = null
 var _context_menu: PopupMenu = null
 var _ctx_cam_menu: PopupMenu = null
@@ -201,7 +205,10 @@ func _on_files_dropped(files: PackedStringArray) -> void:
 
 
 func _exit_tree() -> void:
-	tracking.stop()
+	tracking.stop(true)
+	tracking.stop_install()
+	if capture_manager != null and capture_manager.recording_active:
+		capture_manager.stop_recording()
 	if not _shutting_down:
 		save_config()
 
@@ -228,23 +235,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func _make_clip_loader(path: String, clip_name: String) -> Callable:
+	return func():
+		var loaded: Dictionary = _load_motion_clip(path, clip_name)
+		if loaded.get("ok", false):
+			return loaded["clip"]
+		push_warning("アニメーションを読めません: %s (%s)" % [path, loaded.get("error", "")])
+		return null
+
+
 func _preload_bundled_animations() -> void:
 	var anim_dir: String = ConfigManagerScript.get_app_root_dir().path_join("assets/animations")
 	if not DirAccess.dir_exists_absolute(anim_dir):
 		push_warning("Bundled animations directory not found: " + anim_dir)
 		return
-	# 直下と、1 階層下のフォルダ (例: quaternius/) を読む
+	# 直下と、1 階層下のフォルダ (例: quaternius/) を登録だけしておく (再生時に遅延読み込み)
 	var dirs: Array[String] = [anim_dir]
 	for sub in DirAccess.get_directories_at(anim_dir):
 		dirs.append(anim_dir.path_join(sub))
 	for d in dirs:
 		for fn in DirAccess.get_files_at(d):
 			if fn.ends_with(".vrma"):
-				var loaded: Dictionary = VrmaLoaderScript.load_vrma(d.path_join(fn), bridge)
-				if loaded.get("ok", false):
-					var clip = loaded["clip"]
-					vrma_player.add_clip(clip.name, clip)
-	print("Preloaded %d bundled animations from %s" % [vrma_player.get_clip_names().size(), anim_dir])
+				var clip_name: String = fn.get_basename()
+				vrma_player.register_lazy_clip(clip_name, _make_clip_loader(d.path_join(fn), clip_name))
+	print("Registered %d bundled animations from %s" % [vrma_player.get_clip_names().size(), anim_dir])
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +284,11 @@ func open_presets_folder(kind: String) -> void:
 var _preset_clip_names: Array[String] = []
 
 
-## プリセットのフォルダのアニメーション (.vrma / .npz) を読み直す。読み込んだ数を返す。
+## プリセットのフォルダのアニメーション (.vrma / .npz) を読み直す。登録した数を返す。
 func reload_animation_presets() -> int:
 	for nm in _preset_clip_names:
 		if vrma_player.current_name != nm:
-			vrma_player.clips.erase(nm)
+			vrma_player.erase_clip(nm)
 	_preset_clip_names.clear()
 	var d := presets_dir("animations")
 	var files := Array(DirAccess.get_files_at(d))
@@ -283,12 +297,9 @@ func reload_animation_presets() -> int:
 		var low := str(fn).to_lower()
 		if not (low.ends_with(".vrma") or low.ends_with(".npz")):
 			continue
-		var r := _load_motion_clip(d.path_join(fn), "")
-		if r.get("ok", false):
-			vrma_player.add_clip(r["clip"].name, r["clip"])
-			_preset_clip_names.append(r["clip"].name)
-		else:
-			push_warning("プリセットのアニメーションを読めません: %s (%s)" % [fn, r.get("error", "")])
+		var clip_name: String = str(fn).get_basename()
+		vrma_player.register_lazy_clip(clip_name, _make_clip_loader(d.path_join(fn), clip_name))
+		_preset_clip_names.append(clip_name)
 	_emit_state_changed()
 	return _preset_clip_names.size()
 
@@ -628,11 +639,17 @@ func _poll_vmc() -> void:
 
 	var blends: Dictionary = frame.get("blendshapes", {})
 	if bool(frame.get("blend_apply", false)) and not blends.is_empty():
+		var auto_expr: bool = bool(tracking.settings.get("expressions", true))
 		var mapped := {}
 		for k in blends.keys():
 			var ek := str(VMC_EXPR_ALIASES.get(str(k), str(k)))
+			if not auto_expr and VMC_AUTO_EMOTION_KEYS.has(ek):
+				continue
+			if _manual_expr_overrides.has(ek):
+				continue
 			mapped[ek] = float(blends[k])
-		current_vrm.expressions.set_weights(mapped, 0.0, false)
+		if not mapped.is_empty():
+			current_vrm.expressions.set_weights(mapped, 0.0, false)
 
 
 static func _vmc_bone_to_vrm(raw: String) -> String:
@@ -765,6 +782,10 @@ func set_animation_params(params: Dictionary) -> void:
 
 
 func set_expression_weight(ename: String, weight: float, transition_sec: float = 0.0) -> void:
+	if weight > 0.001:
+		_manual_expr_overrides[ename] = true
+	else:
+		_manual_expr_overrides.erase(ename)
 	if current_vrm == null:
 		return
 	current_vrm.expressions.set_weight(ename, weight, transition_sec)
@@ -772,6 +793,14 @@ func set_expression_weight(ename: String, weight: float, transition_sec: float =
 
 
 func set_expressions_weights(weights: Dictionary, transition_sec: float = 0.0, reset_others: bool = false) -> void:
+	if reset_others:
+		_manual_expr_overrides.clear()
+	for k in weights.keys():
+		var ek := str(k)
+		if float(weights[k]) > 0.001:
+			_manual_expr_overrides[ek] = true
+		else:
+			_manual_expr_overrides.erase(ek)
 	if current_vrm == null:
 		return
 	current_vrm.expressions.set_weights(weights, transition_sec, reset_others)
@@ -779,6 +808,7 @@ func set_expressions_weights(weights: Dictionary, transition_sec: float = 0.0, r
 
 
 func reset_expressions(transition_sec: float = 0.0) -> void:
+	_manual_expr_overrides.clear()
 	if current_vrm == null:
 		return
 	current_vrm.expressions.reset_all(transition_sec)
@@ -1137,6 +1167,8 @@ func _on_hotkey_action(action: String) -> void:
 
 
 func _on_lighting_changed() -> void:
+	if bg_manager != null:
+		bg_manager.sync_output_environment()
 	if current_vrm != null and current_vrm.spring_bone != null:
 		current_vrm.spring_bone.external_wind = lighting_rig.wind
 	_emit_state_changed()
@@ -1146,6 +1178,10 @@ func _get_model_height() -> float:
 	if current_vrm == null:
 		return 1.6
 	return maxf(current_vrm.get_approx_bounds().size.y, 0.6)
+
+
+func get_model_height() -> float:
+	return _get_model_height()
 
 
 func _anim_state_dict() -> Dictionary:
@@ -1228,6 +1264,10 @@ func _build_main_overlay() -> void:
 	_overlay_layer = CanvasLayer.new()
 	_overlay_layer.layer = 10
 	add_child(_overlay_layer)
+
+	_toast_layer = CanvasLayer.new()
+	_toast_layer.layer = 20
+	add_child(_toast_layer)
 
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1646,6 +1686,13 @@ func get_direct_hips_offset() -> Vector3:
 	return Vector3.ZERO
 
 
+func set_direct_hips_offset(offset: Vector3, enabled: bool = true) -> void:
+	if current_vrm == null:
+		return
+	current_vrm.direct_hips_offset = offset if enabled else Vector3.ZERO
+	current_vrm.has_direct_hips_offset = enabled
+
+
 func mirror_bones_pose(left_to_right: bool) -> void:
 	var src_prefix: String = "left" if left_to_right else "right"
 	var dst_prefix: String = "right" if left_to_right else "left"
@@ -1816,6 +1863,8 @@ func reset_all_settings() -> void:
 # ---------------------------------------------------------------------------
 
 func start_tracking() -> Dictionary:
+	if not tracking.is_installed():
+		return tracking.start(osc_port)
 	if bridge == null or not bridge.is_servers_running():
 		return {"ok": false, "error": "OSC/VMC 受信サーバーが動いていません"}
 	_clear_vmc_pose()
@@ -1959,7 +2008,7 @@ func notify(message: String, action_text: String = "", action: Callable = Callab
 
 
 func _show_main_toast(message: String, action_text: String, action: Callable, seconds: float) -> void:
-	if _overlay_layer == null or DisplayServer.get_name() == "headless":
+	if _toast_layer == null or DisplayServer.get_name() == "headless":
 		return
 	if _toast == null:
 		var holder := MarginContainer.new()
@@ -1970,18 +2019,14 @@ func _show_main_toast(message: String, action_text: String, action: Callable, se
 		holder.add_theme_constant_override("margin_bottom", 20)
 		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		holder.theme = UiThemeScript.get_theme()
-		_overlay_layer.add_child(holder)
-		_toast = PanelContainer.new()
-		var st := UiThemeScript.box(Color(0.13, 0.14, 0.17, 0.95), 8, Color("#3a3f4a"), 1, 14, 9)
-		st.border_color = UiThemeScript.ACCENT
-		st.border_width_left = 4
-		_toast.add_theme_stylebox_override("panel", st)
+		_toast_layer.add_child(holder)
+		var toast_res: Dictionary = preload("res://scripts/ui/ui_widgets.gd").make_toast_panel()
+		_toast = toast_res["panel"]
 		_toast.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_toast.size_flags_vertical = Control.SIZE_SHRINK_END
 		holder.add_child(_toast)
-		var hb := HBoxContainer.new()
+		var hb: HBoxContainer = toast_res["hbox"]
 		hb.add_theme_constant_override("separation", 12)
-		_toast.add_child(hb)
 		_toast_lbl = Label.new()
 		_toast_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		hb.add_child(_toast_lbl)
@@ -2024,6 +2069,13 @@ var last_screenshot_path: String = ""
 
 func get_screenshots_dir() -> String:
 	return capture_manager._resolve_output_path(capture_manager.screenshots_dir)
+
+
+func get_capture_dir(sub: String) -> String:
+	if capture_manager == null:
+		return ""
+	var raw: String = capture_manager.recordings_dir if sub == "recordings" else capture_manager.screenshots_dir
+	return str(capture_manager._resolve_output_path(raw))
 
 
 # ---------------------------------------------------------------------------

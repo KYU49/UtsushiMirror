@@ -1,7 +1,7 @@
 shader_type spatial;
 render_mode cull_back, depth_draw_opaque, ambient_light_disabled, specular_disabled;
 
-uniform float u_time = 0.0;
+global uniform float vv_time;
 uniform bool u_is_unlit = false;
 
 // UV transform (KHR_texture_transform + VRM expression textureTransformBinds)
@@ -32,12 +32,14 @@ uniform sampler2D u_shading_shift_tex : hint_default_black, filter_linear_mipmap
 uniform float u_shading_toony = 0.9;
 uniform float u_gi_equalization = 0.9;
 // VRMViewer: 影の見た目の調整 (全マテリアル共通に入れる。既定値では MToon の仕様どおり)
-uniform float vv_shade_shift = 0.0;      // + で影の範囲が狭く、- で広く
-uniform float vv_toony_offset = 0.0;     // + で影の境界がくっきり、- でなめらか
-uniform float vv_shade_strength = 1.0;   // 0 で影の色を使わない (明るい色のまま)、1 でモデルどおり、2 まで上げるとさらに暗く
+global uniform float vv_shade_shift;     // + で影の範囲が狭く、- で広く
+global uniform float vv_toony_offset;    // + で影の境界がくっきり、- でなめらか
+global uniform float vv_shade_strength;  // 0 で影の色を使わない (明るい色のまま)、1 でモデルどおり、2 まで上げるとさらに暗く
 // 落ち影を濃くする分 (0 = Godot の影のまま)。ライトの「落ち影の濃さ」が 1 を超えた分が入る
 global uniform float vv_cast_dark;
-uniform vec3 vv_shade_tint = vec3(1.0);  // 影の色味
+global uniform vec3 vv_shade_tint;       // 影の色味
+global uniform vec3 vv_ambient_color;
+global uniform float vv_ambient_energy;
 
 // Normal
 uniform bool u_has_normal_tex = false;
@@ -79,14 +81,14 @@ vec2 compute_mtoon_uv(vec2 base_uv) {
 	if (u_has_uv_anim_mask) {
 		mask = texture(u_uv_anim_mask_tex, uv).b;
 	}
-	float angle = u_uv_anim_rotation * u_time * mask;
+	float angle = u_uv_anim_rotation * vv_time * mask;
 	if (abs(angle) > 0.00001) {
 		vec2 centered = uv - vec2(0.5);
 		float s = sin(angle);
 		float c = cos(angle);
 		uv = vec2(centered.x * c - centered.y * s, centered.x * s + centered.y * c) + vec2(0.5);
 	}
-	uv += vec2(u_uv_anim_scroll_x, u_uv_anim_scroll_y) * u_time * mask;
+	uv += vec2(u_uv_anim_scroll_x, u_uv_anim_scroll_y) * vv_time * mask;
 	return uv;
 }
 
@@ -140,44 +142,36 @@ void fragment() {
 	if (u_is_unlit) {
 		ALBEDO = base.rgb + emissive + matcap_term + rim;
 		EMISSION = vec3(0.0);
+		ROUGHNESS = 1.0;
 	} else {
-		// ALBEDO is set to 1.0 so DIFFUSE_LIGHT directly outputs MToon lit/shade mix without double-multiplying.
-		ALBEDO = vec3(1.0);
-		// Base ambient / GI contribution weighted by giEqualization
-		vec3 shade_col = base.rgb * u_shade_color * u_expr_shade_mul.rgb;
+		vec3 lit_col = base.rgb;
+		vec3 raw_shade = lit_col * u_shade_color * u_expr_shade_mul.rgb;
 		if (u_has_shade_tex) {
-			shade_col = texture(u_shade_tex, uv).rgb * u_shade_color * u_expr_shade_mul.rgb * u_base_color.rgb * u_expr_color_mul.rgb;
+			raw_shade = texture(u_shade_tex, uv).rgb * u_shade_color * u_expr_shade_mul.rgb * u_base_color.rgb * u_expr_color_mul.rgb;
 		}
-		vec3 gi_approx = mix(shade_col, base.rgb, 0.5) * (0.08 + 0.08 * u_gi_equalization);
+		vec3 sc = raw_shade * vv_shade_tint;
+		// 1 まではモデルの影色へ近づけ、1 を超えたら影色をさらに暗くする (影色が明るいモデルでも差が出るように)
+		vec3 eff_shade = vv_shade_strength <= 1.0 ? mix(lit_col, sc, vv_shade_strength)
+				: sc * mix(1.0, 0.15, clamp(vv_shade_strength - 1.0, 0.0, 1.0));
+		float shift = u_shading_shift;
+		if (u_has_shading_shift_tex) {
+			shift += texture(u_shading_shift_tex, uv).g * u_shading_shift_tex_scale;
+		}
+		// Base ambient / GI contribution weighted by giEqualization & LightingRig ambient
+		vec3 gi_approx = mix(eff_shade, lit_col, 0.5) * vv_ambient_color * (vv_ambient_energy / 0.45) * (0.08 + 0.08 * u_gi_equalization);
 		EMISSION = emissive + matcap_term + rim * (1.0 - 0.5 * u_rim_lighting_mix) + gi_approx;
+		// Pass precomputed lit/shade/shift into light() without re-sampling textures per light
+		ALBEDO = max(lit_col, vec3(0.001));
+		BACKLIGHT = eff_shade;
+		ROUGHNESS = clamp(shift * 0.25 + 0.5, 0.0, 1.0);
 	}
-	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
 }
 
 void light() {
 	if (!u_is_unlit) {
-		vec2 uv = compute_mtoon_uv(UV);
-		vec4 base = u_base_color * u_expr_color_mul;
-		if (u_has_base_tex) {
-			base *= texture(u_base_tex, uv);
-		}
-		vec3 lit_col = base.rgb;
-		vec3 shade_col = lit_col * u_shade_color * u_expr_shade_mul.rgb;
-		if (u_has_shade_tex) {
-			shade_col = texture(u_shade_tex, uv).rgb * u_shade_color * u_expr_shade_mul.rgb * u_base_color.rgb * u_expr_color_mul.rgb;
-		}
-
-		float shift = u_shading_shift;
-		if (u_has_shading_shift_tex) {
-			shift += texture(u_shading_shift_tex, uv).g * u_shading_shift_tex_scale;
-		}
-
-		vec3 sc = shade_col * vv_shade_tint;
-		// 1 まではモデルの影色へ近づけ、1 を超えたら影色をさらに暗くする (影色が明るいモデルでも差が出るように)
-		shade_col = vv_shade_strength <= 1.0 ? mix(lit_col, sc, vv_shade_strength)
-				: sc * mix(1.0, 0.15, clamp(vv_shade_strength - 1.0, 0.0, 1.0));
+		float shift = (ROUGHNESS - 0.5) * 4.0;
 		float ndotl = dot(NORMAL, LIGHT);
 		float shading = ndotl + shift + vv_shade_shift;
 		float toony = clamp(u_shading_toony + vv_toony_offset, 0.0, 0.999);
@@ -186,10 +180,10 @@ void light() {
 		float t = clamp((shading - min_v) / max(0.0001, max_v - min_v), 0.0, 1.0);
 		float atten = min(ATTENUATION, t);
 
-		vec3 direct_col = mix(shade_col, lit_col, atten);
+		vec3 direct_col = mix(BACKLIGHT, ALBEDO, atten);
 		// 落ち影 (ATTENUATION が下がった所) をさらに暗く
 		direct_col *= 1.0 - clamp(vv_cast_dark, 0.0, 1.0) * 0.85 * (1.0 - ATTENUATION);
 		vec3 light_energy = LIGHT_COLOR * (0.68 / 3.14159265);
-		DIFFUSE_LIGHT += direct_col * light_energy;
+		DIFFUSE_LIGHT += (direct_col / ALBEDO) * light_energy;
 	}
 }

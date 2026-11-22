@@ -41,6 +41,7 @@ var _bridge: Node = null
 var _sky_grad_shader: Shader = null
 var _sky_img_shader: Shader = null
 var _applied_click_through: bool = false
+static var _img_tex_cache: Dictionary = {} # path -> {"mtime": int, "tex": Texture2D}
 
 
 func setup(
@@ -209,12 +210,46 @@ func output_to_dict() -> Dictionary:
 
 func _apply_main_background() -> void:
 	var root_vp := get_viewport()
+	var is_trans := win_transparent or (bg_mode == "transparent_window")
 	if root_vp != null:
-		root_vp.transparent_bg = win_transparent or (bg_mode == "transparent_window")
+		root_vp.transparent_bg = is_trans
 
 	if world_env != null and world_env.environment != null:
-		_apply_env_background(world_env.environment, bg_mode, bg_color, bg_gradient_bottom, bg_image_path, true)
-		_apply_canvas_background(world_env.environment)
+		if not is_trans and main_bg_rect != null and main_bg_image_rect != null:
+			_set_main_clear_color(bg_mode, bg_color)
+			_apply_canvas_background(world_env.environment)
+		else:
+			_apply_env_background(world_env.environment, bg_mode, bg_color, bg_gradient_bottom, bg_image_path, true)
+			_apply_canvas_background(world_env.environment)
+
+
+func sync_output_environment() -> void:
+	if output_camera == null or output_camera.environment == null or world_env == null or world_env.environment == null:
+		return
+	var src := world_env.environment
+	var dst := output_camera.environment
+	dst.ambient_light_color = src.ambient_light_color
+	dst.ambient_light_energy = src.ambient_light_energy
+	dst.glow_enabled = src.glow_enabled
+	dst.glow_intensity = src.glow_intensity
+	dst.glow_hdr_threshold = src.glow_hdr_threshold
+	dst.glow_hdr_scale = src.glow_hdr_scale
+	dst.glow_blend_mode = src.glow_blend_mode
+	dst.glow_bloom = src.glow_bloom
+	dst.tonemap_exposure = src.tonemap_exposure
+	dst.tonemap_mode = src.tonemap_mode
+
+
+func _set_main_clear_color(mode: String, col: Color) -> void:
+	var base := Color(col.r, col.g, col.b, 1.0)
+	match mode:
+		"transparent", "transparent_window":
+			base = Color(0.0, 0.0, 0.0, 0.0)
+		"chroma_green":
+			base = Color(0.0, 1.0, 0.0, 1.0)
+		"chroma_blue":
+			base = Color(0.0, 0.0, 1.0, 1.0)
+	RenderingServer.set_default_clear_color(base)
 
 
 ## メイン画面の不透明な背景は、3D の背景色ではなく 3D の奥の 2D の板 (MainBgLayer, layer -100) で描く。
@@ -417,7 +452,16 @@ void sky() {
 static func _load_image_tex(path: String) -> Texture2D:
 	if path == "" or not FileAccess.file_exists(path):
 		return null
+	var mtime := int(FileAccess.get_modified_time(path))
+	if _img_tex_cache.has(path):
+		var entry: Dictionary = _img_tex_cache[path]
+		if int(entry.get("mtime", -1)) == mtime and entry.get("tex") != null:
+			return entry["tex"]
 	var img := Image.load_from_file(path)
 	if img == null or img.is_empty():
 		return null
-	return ImageTexture.create_from_image(img)
+	var tex := ImageTexture.create_from_image(img)
+	if _img_tex_cache.size() >= 16:
+		_img_tex_cache.clear()
+	_img_tex_cache[path] = {"mtime": mtime, "tex": tex}
+	return tex

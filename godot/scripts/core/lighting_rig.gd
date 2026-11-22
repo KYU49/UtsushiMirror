@@ -357,6 +357,8 @@ func _apply() -> void:
 		rim_light.light_energy = rim_energy
 		rim_light.light_color = rim_color
 		rim_light.shadow_enabled = false
+	RenderingServer.global_shader_parameter_set("vv_ambient_color", Vector3(ambient_color.r, ambient_color.g, ambient_color.b))
+	RenderingServer.global_shader_parameter_set("vv_ambient_energy", ambient_energy)
 	if world_env != null and world_env.environment != null:
 		var env := world_env.environment
 		env.ambient_light_color = ambient_color

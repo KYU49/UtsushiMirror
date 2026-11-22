@@ -11,6 +11,7 @@ extends RefCounted
 
 ## インストールが終わった (ok = 成功)
 signal installation_finished(ok: bool)
+signal cameras_refreshed(cameras: Array)
 
 const ConfigManagerScript := preload("res://scripts/core/config_manager.gd")
 
@@ -82,10 +83,15 @@ var last_error: String = ""
 var status: Dictionary = {}       # トラッカーからの最新の状態 (fps・検出・明るさ・補正)
 var control_port: int = 39540
 var _pid: int = -1
+var _dying_pids: Array[int] = []
 var _udp := PacketPeerUDP.new()
 var _udp_ready := false
 var _next_poll_msec := 0
 var _last_status_msec := 0
+var _refreshing_cameras: bool = false
+var _calib_cache_path: String = ""
+var _calib_cache_mtime: int = -1
+var _calib_cache_val: String = ""
 
 # ---- トラッキング用のシステム (uv と tracker\.venv) のインストール
 ## 使う容量の目安 (MB): アプリのフォルダ (.venv) と、ユーザーのフォルダ (uv の Python とダウンロードのキャッシュ)
@@ -150,15 +156,31 @@ func is_installed() -> bool:
 
 ## uv の場所 (見つからなければ "")
 func find_uv() -> String:
-	var out: Array = []
-	if OS.get_name() == "Windows" and OS.execute("where.exe", PackedStringArray(["uv"]), out, true) == 0 and not out.is_empty():
-		var first := str(out[0]).strip_edges().split("\n")[0].strip_edges()
-		if first != "" and FileAccess.file_exists(first):
-			return first
+	var uv_bin := "uv.exe" if OS.get_name() == "Windows" else "uv"
+	var sep := ";" if OS.get_name() == "Windows" else ":"
+	for dir_raw in OS.get_environment("PATH").split(sep, false):
+		var d := dir_raw.strip_edges()
+		if d != "":
+			var cand := d.path_join(uv_bin)
+			if FileAccess.file_exists(cand):
+				return cand
+	var candidates: Array[String] = []
+	var uv_dir := OS.get_environment("UV_INSTALL_DIR")
+	if uv_dir != "":
+		candidates.append(uv_dir.path_join(uv_bin))
+		candidates.append(uv_dir.path_join("bin").path_join(uv_bin))
+	var xdg_bin := OS.get_environment("XDG_BIN_HOME")
+	if xdg_bin != "":
+		candidates.append(xdg_bin.path_join(uv_bin))
 	var home := OS.get_environment("USERPROFILE")
 	var local := OS.get_environment("LOCALAPPDATA")
-	for p in [home.path_join(".local/bin/uv.exe"), local.path_join("Microsoft/WinGet/Links/uv.exe"), home.path_join(".cargo/bin/uv.exe")]:
-		if home != "" and FileAccess.file_exists(p):
+	if home != "":
+		candidates.append(home.path_join(".local/bin").path_join(uv_bin))
+		candidates.append(home.path_join(".cargo/bin").path_join(uv_bin))
+	if local != "":
+		candidates.append(local.path_join("Microsoft/WinGet/Links").path_join(uv_bin))
+	for p in candidates:
+		if FileAccess.file_exists(p):
 			return p
 	return ""
 
@@ -307,6 +329,10 @@ func _write_settings_file() -> void:
 func start(osc_port: int) -> Dictionary:
 	if is_running():
 		return {"ok": true, "pid": _pid}
+	for dpid in _dying_pids:
+		if dpid > 0 and OS.is_process_running(dpid):
+			OS.kill(dpid)
+	_dying_pids.clear()
 	if not is_installed():
 		last_error = "トラッキング用のシステムが入っていません。設定画面の「トラッキング」ページからインストールしてください。"
 		return {"ok": false, "error": last_error, "not_installed": true}
@@ -345,17 +371,72 @@ func start(osc_port: int) -> Dictionary:
 	return {"ok": true, "pid": _pid}
 
 
-func stop() -> void:
-	if is_running():
+func stop(force_immediate: bool = false) -> void:
+	var old_pid := _pid
+	if old_pid > 0 and OS.is_process_running(old_pid):
 		_send({"cmd": "stop"})
-		OS.kill(_pid)
+		if force_immediate:
+			OS.kill(old_pid)
+		else:
+			_dying_pids.append(old_pid)
+			WorkerThreadPool.add_task(func():
+				for _i in range(10):
+					if not OS.is_process_running(old_pid):
+						call_deferred("_on_dying_pid_done", old_pid)
+						return
+					OS.delay_msec(40)
+				if OS.is_process_running(old_pid):
+					OS.kill(old_pid)
+				call_deferred("_on_dying_pid_done", old_pid)
+			)
 	_pid = -1
 	status = {}
+	_close_udp()
+
+
+func stop_install() -> void:
+	if is_installing():
+		OS.kill(_inst_pid)
+	_inst_pid = -1
+
+
+func _on_dying_pid_done(pid: int) -> void:
+	_dying_pids.erase(pid)
+
+
+func _close_udp() -> void:
+	if _udp_ready:
+		_udp.close()
+		_udp_ready = false
 
 
 func refresh_cameras() -> Array:
 	var out: Array = []
 	var code := OS.execute(find_python(), PackedStringArray([script_path(), "--list-cameras"]), out, true)
+	_parse_camera_output(code, out)
+	return cameras
+
+
+func refresh_cameras_async() -> void:
+	if _refreshing_cameras:
+		return
+	_refreshing_cameras = true
+	var py := find_python()
+	var sc := script_path()
+	WorkerThreadPool.add_task(func():
+		var out: Array = []
+		var code := OS.execute(py, PackedStringArray([sc, "--list-cameras"]), out, true)
+		call_deferred("_on_cameras_refreshed", code, out)
+	)
+
+
+func _on_cameras_refreshed(code: int, out: Array) -> void:
+	_refreshing_cameras = false
+	_parse_camera_output(code, out)
+	cameras_refreshed.emit(cameras.duplicate())
+
+
+func _parse_camera_output(code: int, out: Array) -> void:
 	cameras.clear()
 	if code == 0 and out.size() > 0:
 		for line in str(out[0]).split("\n"):
@@ -368,7 +449,6 @@ func refresh_cameras() -> Array:
 						cameras.append({"index": int(c), "name": "Camera %d" % int(c)})
 	else:
 		last_error = "カメラ一覧を取得できません (Python 環境を確認してください)"
-	return cameras
 
 
 ## 設定を反映する。戻り値: トラッカーの再起動が必要なら true
@@ -436,6 +516,8 @@ func calibrate() -> Dictionary:
 
 
 func reset_calibration() -> void:
+	_calib_cache_mtime = -1
+	_calib_cache_val = ""
 	if is_running():
 		_send({"cmd": "reset_calibration"})
 	elif FileAccess.file_exists(calib_file()):
@@ -446,10 +528,20 @@ func reset_calibration() -> void:
 func calibration_time() -> String:
 	if status.has("calibrated_at") and is_running():
 		return str(status.calibrated_at)
-	if not FileAccess.file_exists(calib_file()):
+	var cf := calib_file()
+	if not FileAccess.file_exists(cf):
+		_calib_cache_path = cf
+		_calib_cache_mtime = -1
+		_calib_cache_val = ""
 		return ""
-	var d = JSON.parse_string(FileAccess.get_file_as_string(calib_file()))
-	return str(d.get("time", "")) if typeof(d) == TYPE_DICTIONARY else ""
+	var mtime := int(FileAccess.get_modified_time(cf))
+	if cf == _calib_cache_path and mtime == _calib_cache_mtime:
+		return _calib_cache_val
+	var d = JSON.parse_string(FileAccess.get_file_as_string(cf))
+	_calib_cache_path = cf
+	_calib_cache_mtime = mtime
+	_calib_cache_val = str(d.get("time", "")) if typeof(d) == TYPE_DICTIONARY else ""
+	return _calib_cache_val
 
 
 func _send(obj: Dictionary) -> void:

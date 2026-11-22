@@ -11,27 +11,48 @@ param(
 $ErrorActionPreference = "Continue"
 $env:UV_NO_PROGRESS = "1"
 $env:NO_COLOR = "1"
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
 
 function Write-Log([string]$Line) {
-    [System.IO.File]::AppendAllText($Log, $Line + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    for ($i = 0; $i -lt 5; $i++) {
+        try {
+            [System.IO.File]::AppendAllText($Log, $Line + "`n", $enc)
+            return
+        } catch {
+            Start-Sleep -Milliseconds 40
+        }
+    }
 }
 
 function Find-Uv {
     $cmd = Get-Command uv -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
-    $candidates = @(
-        (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
-        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\uv.exe"),
-        (Join-Path $env:USERPROFILE ".cargo\bin\uv.exe")
-    )
+    $candidates = @()
+    if ($env:UV_INSTALL_DIR) {
+        $candidates += (Join-Path $env:UV_INSTALL_DIR "uv.exe")
+        $candidates += (Join-Path $env:UV_INSTALL_DIR "bin\uv.exe")
+    }
+    if ($env:XDG_BIN_HOME) {
+        $candidates += (Join-Path $env:XDG_BIN_HOME "uv.exe")
+    }
+    if ($env:USERPROFILE) {
+        $candidates += (Join-Path $env:USERPROFILE ".local\bin\uv.exe")
+        $candidates += (Join-Path $env:USERPROFILE ".cargo\bin\uv.exe")
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates += (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\uv.exe")
+    }
     foreach ($c in $candidates) {
-        if (Test-Path $c) { return $c }
+        if ($c -and (Test-Path $c)) { return $c }
     }
     return $null
 }
 
 try {
-    Set-Location $PSScriptRoot
+    Set-Location $PSScriptRoot -ErrorAction Stop
     $uv = Find-Uv
     if (-not $uv) {
         Write-Log "@@STEP uv"

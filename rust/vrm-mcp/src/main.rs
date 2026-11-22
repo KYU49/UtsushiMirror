@@ -3,6 +3,8 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
+use std::time::Duration;
+use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Message};
 use vrm_protocol::{RpcRequest, RpcResponse};
 
@@ -60,15 +62,40 @@ fn ws_url() -> String {
     std::env::var("VRMVIEWER_WS_URL").unwrap_or_else(|_| "ws://127.0.0.1:19100".to_string())
 }
 
+fn timeout_secs_for(method: &str, default_secs: u64) -> u64 {
+    if let Ok(raw) = std::env::var("VRMVIEWER_TIMEOUT_SEC") {
+        if let Ok(v) = raw.trim().parse::<u64>() {
+            return v.max(1);
+        }
+    }
+    if method == "render_sequence" {
+        default_secs.max(600)
+    } else {
+        default_secs.max(1)
+    }
+}
+
 fn call_viewer(ws: &str, method: &str, params: Value) -> Result<Value> {
+    call_viewer_with_timeout(ws, method, params, timeout_secs_for(method, 30))
+}
+
+fn call_viewer_with_timeout(ws: &str, method: &str, params: Value, timeout_secs: u64) -> Result<Value> {
     let (mut socket, _) =
         connect(ws).with_context(|| format!("Cannot connect to UtsushiMirror WebSocket at {ws}"))?;
+    let timeout = Some(Duration::from_secs(timeout_secs));
+    if let MaybeTlsStream::Plain(tcp) = socket.get_ref() {
+        let _ = tcp.set_read_timeout(timeout);
+        let _ = tcp.set_write_timeout(timeout);
+    }
     let req = RpcRequest::new(1, method, params);
     socket.send(Message::Text(serde_json::to_string(&req)?.into()))?;
     loop {
         match socket.read()? {
             Message::Text(txt) => {
                 let resp: RpcResponse = serde_json::from_str(&txt)?;
+                if resp.id != json!(1) {
+                    continue;
+                }
                 let _ = socket.close(None);
                 if let Some(err) = resp.error {
                     return Err(anyhow!("UtsushiMirror RPC error ({}): {}", err.code, err.message));
@@ -441,89 +468,58 @@ fn tool_definitions() -> Value {
     ])
 }
 
+fn text_result(v: &Value) -> Result<Value> {
+    Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(v)? }] }))
+}
+
+fn rpc_method_for_tool(name: &str) -> Option<(&'static str, bool)> {
+    // (viewer_rpc_method, takes_empty_params)
+    Some(match name {
+        "vrm_get_state" => ("get_state", true),
+        "vrm_get_model_info" => ("get_model_info", true),
+        "vrm_load_model" => ("load_vrm", false),
+        "vrm_unload_model" => ("unload_vrm", true),
+        "vrm_set_camera" => ("set_camera", false),
+        "vrm_set_lighting" => ("set_lighting", false),
+        "vrm_play_animation" => ("play_animation", false),
+        "vrm_stop_animation" => ("stop_animation", true),
+        "vrm_set_idle" => ("set_idle_params", false),
+        "vrm_set_expressions" => ("set_expressions", false),
+        "vrm_set_lookat" => ("set_lookat", false),
+        "vrm_set_bones" => ("set_bones", false),
+        "vrm_apply_pose_preset" => ("apply_pose_preset", false),
+        "vrm_set_model_transform" => ("set_model_transform", false),
+        "vrm_set_output_viewport" => ("set_output_viewport", false),
+        "vrm_turn" => ("turn", false),
+        "vrm_set_background" => ("set_background", false),
+        "vrm_set_window" => ("set_window", false),
+        "vrm_start_recording" => ("start_recording", false),
+        "vrm_stop_recording" => ("stop_recording", true),
+        "vrm_render_sequence" => ("render_sequence", false),
+        "vrm_set_spout" => ("set_spout", false),
+        "vrm_set_vcam" => ("set_vcam", false),
+        "vrm_talk" => ("talk", false),
+        "vrm_stop_talk" => ("stop_talk", true),
+        "vrm_walk" => ("walk", false),
+        "vrm_stop_walk" => ("stop_walk", true),
+        "vrm_apply_shader_preset" => ("apply_shader_preset", false),
+        "vrm_save_config" => ("save_config", false),
+        _ => return None,
+    })
+}
+
 fn handle_tool_call(ws: &str, name: &str, args: Value) -> Result<Value> {
+    if let Some((method, empty_params)) = rpc_method_for_tool(name) {
+        let p = if empty_params { json!({}) } else { args };
+        let v = call_viewer(ws, method, p)?;
+        return text_result(&v);
+    }
     match name {
-        "vrm_get_state" => {
-            let v = call_viewer(ws, "get_state", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_get_model_info" => {
-            let v = call_viewer(ws, "get_model_info", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_load_model" => {
-            let v = call_viewer(ws, "load_vrm", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_unload_model" => {
-            let v = call_viewer(ws, "unload_vrm", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_camera" => {
-            let v = call_viewer(ws, "set_camera", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_lighting" => {
-            let v = call_viewer(ws, "set_lighting", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_play_animation" => {
-            let v = call_viewer(ws, "play_animation", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_stop_animation" => {
-            let v = call_viewer(ws, "stop_animation", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_idle" => {
-            let v = call_viewer(ws, "set_idle_params", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_expressions" => {
-            let v = call_viewer(ws, "set_expressions", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_lookat" => {
-            let v = call_viewer(ws, "set_lookat", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_bones" => {
-            let v = call_viewer(ws, "set_bones", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
         "vrm_reset_pose" => {
             let t = args.get("transition_sec").and_then(|x| x.as_f64()).unwrap_or(0.0);
             let _ = call_viewer(ws, "reset_bones", json!({ "transition_sec": t }))?;
             let v = call_viewer(ws, "reset_expressions", json!({ "transition_sec": t }))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_apply_pose_preset" => {
-            let v = call_viewer(ws, "apply_pose_preset", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_model_transform" => {
-            let v = call_viewer(ws, "set_model_transform", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_output_viewport" => {
-            let v = call_viewer(ws, "set_output_viewport", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_turn" => {
-            let v = call_viewer(ws, "turn", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_background" => {
-            let v = call_viewer(ws, "set_background", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_window" => {
-            let v = call_viewer(ws, "set_window", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_output_viewport" => {
-            let v = call_viewer(ws, "set_output_viewport", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
+            text_result(&v)
         }
         "vrm_capture_screenshot" => {
             let mut obj = args.as_object().cloned().unwrap_or_default();
@@ -546,50 +542,6 @@ fn handle_tool_call(ws: &str, name: &str, args: Value) -> Result<Value> {
                 }));
             }
             Ok(json!({ "content": content }))
-        }
-        "vrm_start_recording" => {
-            let v = call_viewer(ws, "start_recording", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_stop_recording" => {
-            let v = call_viewer(ws, "stop_recording", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_render_sequence" => {
-            let v = call_viewer(ws, "render_sequence", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_spout" => {
-            let v = call_viewer(ws, "set_spout", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_set_vcam" => {
-            let v = call_viewer(ws, "set_vcam", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_talk" => {
-            let v = call_viewer(ws, "talk", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_stop_talk" => {
-            let v = call_viewer(ws, "stop_talk", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_walk" => {
-            let v = call_viewer(ws, "walk", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_stop_walk" => {
-            let v = call_viewer(ws, "stop_walk", json!({}))?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_apply_shader_preset" => {
-            let v = call_viewer(ws, "apply_shader_preset", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
-        }
-        "vrm_save_config" => {
-            let v = call_viewer(ws, "save_config", args)?;
-            Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v)? }] }))
         }
         _ => Err(anyhow!("Unknown MCP tool: {name}")),
     }

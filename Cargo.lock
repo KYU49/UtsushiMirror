@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "vrm-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "vrm-gdext"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "crossbeam-channel",
@@ -793,10 +793,9 @@ dependencies = [
 
 [[package]]
 name = "vrm-mcp"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
- "base64",
  "serde",
  "serde_json",
  "tungstenite",
@@ -805,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "vrm-protocol"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "rosc",
  "serde",
@@ -815,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "vrm-vrma-gen"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "serde",
