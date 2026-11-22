@@ -52,7 +52,7 @@ var recent_settings_paths: Array[String] = []
 const RECENT_SETTINGS_MAX := 10
 var ws_port: int = 19100
 var osc_port: int = 39539
-var _last_animation: String = "Idle_Loop"
+var _last_animation: String = "for-test_a-pose"
 var _last_lookat_mode: String = "camera"
 var _last_lookat_manual_target: Vector3 = Vector3(0.0, 1.4, 2.0)
 var _last_first_person: bool = false
@@ -690,7 +690,7 @@ func load_vrm(path: String, keep_camera: bool = false) -> Dictionary:
 			recent_vrm_paths.resize(10)
 
 	if _last_animation != "" and not vrma_player.has_clip(_last_animation):
-		_last_animation = "Idle_Loop"  # 前に使っていた動きが無くなったとき (同梱の idle などを消した)
+		_last_animation = "for-test_a-pose"  # 前に使っていた動きが無くなったとき (同梱の idle などを消した)
 	if _last_animation != "" and vrma_player.has_clip(_last_animation):
 		vrma_player.play(_last_animation, true, 1.0, 0.0)
 	if not keep_camera:
@@ -1381,13 +1381,23 @@ func _refresh_context_menu() -> void:
 		sub.id_pressed.connect(_on_ctx_anim_id)
 		_ctx_anim_menu.add_child(sub)
 		var any_playing := false
+		# 女性・男性・共通に分ける (性別の無いものしか無いカテゴリーは見出しを付けない)
+		var parts := {"female": [], "male": [], "": []}
 		for nm in g[1]:
-			var id := _ctx_anim_names.size()
-			_ctx_anim_names.append(str(nm))
-			sub.add_check_item(str(nm), id)
-			var on: bool = vrma_player.playing and vrma_player.current_name == str(nm)
-			sub.set_item_checked(sub.get_item_index(id), on)
-			any_playing = any_playing or on
+			parts[AnimCategoryScript.gender_of(str(nm))].append(str(nm))
+		var has_gender: bool = not parts["female"].is_empty() or not parts["male"].is_empty()
+		for key in ["female", "male", ""]:
+			if parts[key].is_empty():
+				continue
+			if has_gender:
+				sub.add_separator({"female": "女性", "male": "男性", "": "共通"}[key])
+			for nm in parts[key]:
+				var id := _ctx_anim_names.size()
+				_ctx_anim_names.append(nm)
+				sub.add_check_item(AnimCategoryScript.short_name(nm), id)
+				var on: bool = vrma_player.playing and vrma_player.current_name == nm
+				sub.set_item_checked(sub.get_item_index(id), on)
+				any_playing = any_playing or on
 		_ctx_anim_menu.add_submenu_node_item(("● " if any_playing else "") + str(g[0]), sub)
 	_ctx_anim_menu.add_separator()
 	_ctx_anim_menu.add_item("停止 / リセット (Rest Pose)", 999)

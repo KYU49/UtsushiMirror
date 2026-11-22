@@ -2070,17 +2070,21 @@ func _fill_anim_list() -> void:
 	var only := ""
 	if _anim_cat_opt.selected > 0:
 		only = _anim_cat_opt.get_item_text(_anim_cat_opt.selected).get_slice(" (", 0)
+	# 女性・男性を左右の 2 列に、性別の無いものは「共通」の下に (ItemList の 2 列で表のように並べる)
 	_anim_list.clear()
-	for g in groups:
-		if only != "" and g[0] != only:
-			continue
-		if only == "":
-			var h := _anim_list.add_item("― %s ―" % g[0], null, false)
-			_anim_list.set_item_metadata(h, "")
-			_anim_list.set_item_disabled(h, true)
-		for nm in g[1]:
-			var i := _anim_list.add_item(("    " if only == "" else "") + str(nm))
-			_anim_list.set_item_metadata(i, str(nm))
+	for row in AnimCategoryScript.layout(_anim_names_shown, only == "", only):
+		for c in row:
+			var kind := str(c["kind"])
+			var i := _anim_list.add_item(str(c["text"]), null, kind == "clip")
+			_anim_list.set_item_metadata(i, str(c["name"]))
+			if kind != "clip":
+				_anim_list.set_item_disabled(i, true)
+			if kind == "category":
+				_anim_list.set_item_custom_fg_color(i, Color(0.85, 0.35, 0.4))
+			elif kind == "gender":
+				_anim_list.set_item_custom_fg_color(i, Color(0.65, 0.65, 0.7))
+			if kind == "clip":
+				_anim_list.set_item_tooltip(i, str(c["name"]))
 
 
 func _build_tab_animation() -> void:
@@ -2098,6 +2102,9 @@ func _build_tab_animation() -> void:
 	vb.add_child(crow)
 	_anim_list = ItemList.new()
 	_anim_list.custom_minimum_size = Vector2(0, 300)
+	_anim_list.max_columns = 2
+	_anim_list.same_column_width = true
+	_anim_list.resized.connect(func(): _anim_list.fixed_column_width = maxi(80, int((_anim_list.size.x - 40.0) / 2.0)))
 	_anim_list.item_activated.connect(func(idx: int):
 		var nm := _anim_item_name(idx)
 		if controller != null and nm != "":
