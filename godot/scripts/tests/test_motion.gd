@@ -16,6 +16,15 @@ func _check(name: String, cond: bool) -> void:
 
 
 func _initialize() -> void:
+	# 設定とプリセットのフォルダが渡されていなければ、一時フォルダを使う (利用者の本物のフォルダに書かない)
+	var tmp := OS.get_temp_dir().path_join("utsushi_test_motion_%d" % Time.get_ticks_usec())
+	if OS.get_environment("VRMVIEWER_PRESETS_DIR") == "":
+		DirAccess.make_dir_recursive_absolute(tmp.path_join("presets"))
+		OS.set_environment("VRMVIEWER_PRESETS_DIR", tmp.path_join("presets"))
+	if OS.get_environment("VRMVIEWER_CONFIG") == "":
+		DirAccess.make_dir_recursive_absolute(tmp)
+		OS.set_environment("VRMVIEWER_CONFIG", tmp.path_join("config.json"))
+	print("presets: ", OS.get_environment("VRMVIEWER_PRESETS_DIR"), "  config: ", OS.get_environment("VRMVIEWER_CONFIG"))
 	_m = load("res://scenes/main.tscn").instantiate()
 	get_root().add_child(_m)
 
