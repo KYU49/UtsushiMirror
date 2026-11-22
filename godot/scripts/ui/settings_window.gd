@@ -125,7 +125,9 @@ var _pose_edited_lbl: Label
 var _available_human_bones: Array[String] = []
 
 # Tab 5: Anim
-var _anim_list: ItemList
+var _anim_list: GridContainer  # 動きの一覧 (2 列。見出しは Label、動きは Button)
+var _anim_selected := ""  # 一覧で選んでいる動きの名前
+var _anim_btn_group := ButtonGroup.new()
 var _anim_cat_opt: OptionButton  # カテゴリーで絞る (0 = すべて)
 var _anim_names_shown: Array = []  # 一覧に出している名前 (変わったときだけ作り直す)
 var _fx_preset_flow: HFlowContainer
@@ -2039,11 +2041,60 @@ func _push_hips_offset() -> void:
 # Tab 5: Anim
 # ---------------------------------------------------------------------------
 
-## 一覧の idx 行の動きの名前 (カテゴリーの見出しの行は "")
-func _anim_item_name(idx: int) -> String:
-	if idx < 0 or idx >= _anim_list.item_count:
-		return ""
-	return str(_anim_list.get_item_metadata(idx))
+func _play_anim_selected() -> void:
+	if controller != null and _anim_selected != "":
+		controller.play_animation_internal(_anim_selected, _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
+
+
+## 一覧の動きのボタン: 背景は普段なし、マウスを載せると薄く、選ぶとアクセントの色
+func _anim_clip_button(text: String, clip_name: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = clip_name
+	b.toggle_mode = true
+	b.button_group = _anim_btn_group
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.clip_text = true
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.focus_mode = Control.FOCUS_NONE
+	var mk := func(bg: Color) -> StyleBoxFlat:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = bg
+		sb.set_corner_radius_all(4)
+		sb.content_margin_left = 8
+		sb.content_margin_right = 8
+		sb.content_margin_top = 3
+		sb.content_margin_bottom = 3
+		return sb
+	b.add_theme_stylebox_override("normal", mk.call(Color(0, 0, 0, 0)))
+	b.add_theme_stylebox_override("hover", mk.call(UiThemeScript.BG_3))
+	b.add_theme_stylebox_override("pressed", mk.call(UiThemeScript.ACCENT_LO))
+	b.add_theme_stylebox_override("hover_pressed", mk.call(UiThemeScript.ACCENT))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.add_theme_color_override("font_color", UiThemeScript.TEXT)
+	b.add_theme_color_override("font_pressed_color", Color.WHITE)
+	b.add_theme_color_override("font_hover_pressed_color", Color.WHITE)
+	b.button_pressed = clip_name == _anim_selected
+	b.toggled.connect(func(on: bool):
+		if on:
+			_anim_selected = clip_name
+	)
+	b.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed and ev.double_click and ev.button_index == MOUSE_BUTTON_LEFT:
+			_anim_selected = clip_name
+			_play_anim_selected()
+	)
+	return b
+
+
+## 一覧の見出し (マウスを載せても変わらない)
+func _anim_label(text: String, color: Color) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_color_override("font_color", color)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return l
 
 
 ## 動きの一覧を、カテゴリーごとに見出しを付けて作り直す。カテゴリーを選んでいれば、そのカテゴリーだけ
@@ -2070,21 +2121,21 @@ func _fill_anim_list() -> void:
 	var only := ""
 	if _anim_cat_opt.selected > 0:
 		only = _anim_cat_opt.get_item_text(_anim_cat_opt.selected).get_slice(" (", 0)
-	# 女性・男性を左右の 2 列に、性別の無いものは「共通」の下に (ItemList の 2 列で表のように並べる)
-	_anim_list.clear()
+	# 女性・男性を左右の 2 列に、性別の無いものは「共通」の下に
+	for c in _anim_list.get_children():
+		_anim_list.remove_child(c)
+		c.queue_free()
 	for row in AnimCategoryScript.layout(_anim_names_shown, only == "", only):
 		for c in row:
-			var kind := str(c["kind"])
-			var i := _anim_list.add_item(str(c["text"]), null, kind == "clip")
-			_anim_list.set_item_metadata(i, str(c["name"]))
-			if kind != "clip":
-				_anim_list.set_item_disabled(i, true)
-			if kind == "category":
-				_anim_list.set_item_custom_fg_color(i, Color(0.85, 0.35, 0.4))
-			elif kind == "gender":
-				_anim_list.set_item_custom_fg_color(i, Color(0.65, 0.65, 0.7))
-			if kind == "clip":
-				_anim_list.set_item_tooltip(i, str(c["name"]))
+			match str(c["kind"]):
+				"clip":
+					_anim_list.add_child(_anim_clip_button(str(c["text"]), str(c["name"])))
+				"category":
+					_anim_list.add_child(_anim_label(str(c["text"]), UiThemeScript.ACCENT_HI))
+				"gender":
+					_anim_list.add_child(_anim_label(str(c["text"]), UiThemeScript.TEXT_DIM))
+				_:
+					_anim_list.add_child(_anim_label("", UiThemeScript.TEXT_DIM))
 
 
 func _build_tab_animation() -> void:
@@ -2100,25 +2151,32 @@ func _build_tab_animation() -> void:
 	_anim_cat_opt.item_selected.connect(func(_i: int): _fill_anim_list())
 	crow.add_child(_anim_cat_opt)
 	vb.add_child(crow)
-	_anim_list = ItemList.new()
-	_anim_list.custom_minimum_size = Vector2(0, 300)
-	_anim_list.max_columns = 2
-	_anim_list.same_column_width = true
-	_anim_list.resized.connect(func(): _anim_list.fixed_column_width = maxi(80, int((_anim_list.size.x - 40.0) / 2.0)))
-	_anim_list.item_activated.connect(func(idx: int):
-		var nm := _anim_item_name(idx)
-		if controller != null and nm != "":
-			controller.play_animation_internal(nm, _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
-	)
-	vb.add_child(_anim_list)
+	# 一覧: 枠の中をスクロール。クリックで選び、ダブルクリックで再生
+	var frame := PanelContainer.new()
+	var fsb := StyleBoxFlat.new()
+	fsb.bg_color = UiThemeScript.BG_2
+	fsb.border_color = UiThemeScript.LINE
+	fsb.set_border_width_all(1)
+	fsb.set_corner_radius_all(6)
+	fsb.set_content_margin_all(6)
+	frame.add_theme_stylebox_override("panel", fsb)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 300)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_anim_list = GridContainer.new()
+	_anim_list.columns = 2
+	_anim_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_anim_list.add_theme_constant_override("h_separation", 8)
+	_anim_list.add_theme_constant_override("v_separation", 1)
+	scroll.add_child(_anim_list)
+	frame.add_child(scroll)
+	vb.add_child(frame)
 
 	var row := HFlowContainer.new()
 	var b_play := Button.new()
 	b_play.text = "再生"
 	b_play.pressed.connect(func():
-		var sel := _anim_list.get_selected_items()
-		if controller != null and not sel.is_empty() and _anim_item_name(sel[0]) != "":
-			controller.play_animation_internal(_anim_item_name(sel[0]), _anim_loop_chk.button_pressed, _anim_speed_slider.value, _anim_blend_slider.value)
+		_play_anim_selected()
 	)
 	row.add_child(b_play)
 
