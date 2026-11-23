@@ -8,6 +8,7 @@ var _f := 0
 var _ok := true
 var _tmp := ""
 var _wav := ""
+var _wav2 := ""
 var _tone_max := 0.0
 var _silence_max := 0.0
 var _locked_seen := false
@@ -80,6 +81,7 @@ func _process(_d: float) -> bool:
 			_check("渡されたファイル (%s) を解析できる" % sample.get_extension(), s.get("ok", false))
 		# 選択: 既定は「音声から」。テキストの命令は断る
 		_check("口の動きの既定は「音声から」", _m.lipsync_mode == "audio")
+		_check("口の開きの既定は 0.5", is_equal_approx(_m.lip_sync.intensity, 0.5))
 		_check("音声からのときは、テキストの命令を断る", not _m.start_text_talk({"text": "こんにちは"}).get("ok", true))
 		_m.play_animation_internal("Idle_Loop", true, 1.0, 0.0)
 		_anim_name = _m.vrma_player.current_name
@@ -102,7 +104,7 @@ func _process(_d: float) -> bool:
 		_m.current_vrm.expressions.set_weights({"blink": 0.0}, 0.0, false)
 	if _f == 260:
 		print("tone %.2f / silence %.2f" % [_tone_max, _silence_max])
-		_check("音の間は口が開く", _tone_max > 0.4)
+		_check("音の間は口が開く (既定の開き 0.5)", _tone_max > 0.3)
 		_check("無音では口が閉じる", _silence_max < 0.05)
 		_check("リップシンクの間は口を固定する (トラッキング・アニメの口を使わない)", _locked_seen)
 		_check("終わると止まる", not _m.lip_sync.active)
@@ -137,6 +139,25 @@ func _process(_d: float) -> bool:
 		fbad.store_string("{\"kind\": \"other\"}")
 		fbad.close()
 		_check("うつしみらーのファイルでなければ断る", not _m.import_effects(bad).get("ok", true))
+		# ファイルを選んで始めた後に、別のファイルをドロップする
+		_wav2 = _tmp.path_join("tone2.wav")
+		_make_wav(_wav2)
+		var card = _m.settings_window._tab_tracking.lipsync_card
+		card._start_audio(_wav)
+		_check("ファイルを選んで始められる", _m.lip_sync.active and _m.lip_sync.path == _wav)
+		_m.settings_window.files_dropped.emit(PackedStringArray([_wav2]))
+	if _f == 292:
+		_check("動いている間にドロップすると、そのファイルに切り替わる", _m.lip_sync.active and _m.lip_sync.path == _wav2)
+		_m.lip_sync.stop()
+		_check("止めても最後のファイルを覚えている", _m.lip_sync.last_path == _wav2)
+		# 「もう一度」はドロップで始めたファイルを使う
+		var card2 = _m.settings_window._tab_tracking.lipsync_card
+		for b in card2.audio_box.find_children("*", "Button", true, false):
+			if (b as Button).text == "もう一度":
+				(b as Button).pressed.emit()
+		_check("ドロップで始めたものも「もう一度」で始められる", _m.lip_sync.active and _m.lip_sync.path == _wav2)
+		_check("口の開きは mouth_open で保存する", _m.build_config_dict()["lipsync"].has("mouth_open"))
+		_m.lip_sync.stop()
 	if _f == 300:
 		print("TEST_LIPSYNC_RESULT=", "PASS" if _ok else "FAIL")
 		return true

@@ -211,12 +211,17 @@ func _on_files_dropped(files: PackedStringArray) -> void:
 		elif lower.ends_with(".vrma") or lower.ends_with(".npz"):
 			load_vrma_file(path, "", true)
 		elif LipSyncScript.is_media_file(path):
-			var r: Dictionary = start_lipsync({"path": path})
-			if settings_window != null:
-				if r.get("ok", false):
-					settings_window.show_snackbar("音声に口を合わせています: %s (%.1f 秒)" % [path.get_file(), float(r.get("duration_sec", 0.0))])
-				else:
-					settings_window.show_snackbar("リップシンクできません: " + str(r.get("error", "")))
+			# ドロップの受け取り (Windows の OLE) をすぐに返し、解析は次のフレームで行う
+			_start_dropped_lipsync.call_deferred(path)
+
+
+func _start_dropped_lipsync(path: String) -> void:
+	var r: Dictionary = start_lipsync({"path": path})
+	if settings_window != null:
+		if r.get("ok", false):
+			settings_window.show_snackbar("音声に口を合わせています: %s (%.1f 秒)" % [path.get_file(), float(r.get("duration_sec", 0.0))])
+		else:
+			settings_window.show_snackbar("リップシンクできません: " + str(r.get("error", "")))
 
 
 # ---------------------------------------------------------------- リップシンク
@@ -1123,7 +1128,7 @@ func build_config_dict() -> Dictionary:
 		"hotkeys": hotkey_manager.to_dict(),
 		"api": {"ws_port": ws_port, "osc_port": osc_port},
 		"tracking": tracking.settings.duplicate(),
-		"lipsync": {"mode": lipsync_mode, "intensity": lip_sync.intensity, "emotion": lip_sync.emotion},
+		"lipsync": {"mode": lipsync_mode, "mouth_open": lip_sync.intensity, "emotion": lip_sync.emotion},
 	}
 
 
@@ -1217,7 +1222,8 @@ func _apply_config_dict(cfg: Dictionary) -> void:
 		var ls: Dictionary = cfg["lipsync"]
 		if str(ls.get("mode", "")) in LIPSYNC_MODES:
 			set_lipsync_mode(str(ls["mode"]))
-		lip_sync.intensity = clampf(float(ls.get("intensity", lip_sync.intensity)), 0.0, 1.5)
+		# 最初の版は "intensity" (既定 1.0) で保存していた。既定を 0.5 に変えたので、その値は読まない
+		lip_sync.intensity = clampf(float(ls.get("mouth_open", lip_sync.intensity)), 0.0, 1.5)
 		lip_sync.emotion = bool(ls.get("emotion", lip_sync.emotion))
 	if cfg.has("tracking") and typeof(cfg["tracking"]) == TYPE_DICTIONARY:
 		tracking.apply_settings(cfg["tracking"])

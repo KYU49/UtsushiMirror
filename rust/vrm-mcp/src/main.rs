@@ -434,7 +434,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "path": { "type": "string", "description": "Absolute path of the audio or video file." },
                     "offset_sec": { "type": "number", "default": 0, "description": "Start from this position in the file (seconds)." },
-                    "intensity": { "type": "number", "default": 1.0, "description": "Mouth opening multiplier, 0-1.5." },
+                    "intensity": { "type": "number", "default": 0.5, "description": "Mouth opening multiplier, 0-1.5." },
                     "emotion": { "type": "boolean", "description": "Also add light emotions estimated from the voice. Defaults to the app setting." }
                 },
                 "required": ["path"]

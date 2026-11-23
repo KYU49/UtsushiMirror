@@ -58,8 +58,9 @@ func build(win, vb: VBoxContainer) -> void:
 	b_again.text = "もう一度"
 	b_again.tooltip_text = "最後のファイルを最初から"
 	b_again.pressed.connect(func():
-		if _ctl() != null and _last_path() != "":
-			_start_audio(_last_path())
+		# ドロップで始めたものも含めて、最後のファイルを最初から
+		if _ctl() != null and str(_ctl().lip_sync.last_path) != "":
+			_start_audio(str(_ctl().lip_sync.last_path))
 	)
 	row.add_child(b_again)
 	var b_stop := Button.new()
@@ -74,7 +75,7 @@ func build(win, vb: VBoxContainer) -> void:
 	file_lbl.clip_text = true
 	file_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	audio_box.add_child(file_lbl)
-	sl_intensity = UiWidgets.slider(audio_box, "口の開き", 0.2, 1.5, 0.05, 1.0, func(v: float):
+	sl_intensity = UiWidgets.slider(audio_box, "口の開き", 0.2, 1.5, 0.05, LipSyncScript.DEFAULT_INTENSITY, func(v: float):
 		if _ctl() != null:
 			_ctl().lip_sync.intensity = v
 	, is_sync)
@@ -119,17 +120,9 @@ func _ctl():
 	return _win.controller if _win != null else null
 
 
-var _last := ""
-
-
-func _last_path() -> String:
-	return _last
-
-
 func _start_audio(p: String) -> void:
 	if _ctl() == null:
 		return
-	_last = p
 	file_lbl.text = p.get_file()
 	var r: Dictionary = _ctl().start_lipsync({"path": p})
 	if not r.get("ok", false):
@@ -163,6 +156,8 @@ func update_live() -> void:
 		status_lbl.text = "● しゃべっています  残り %.1f 秒" % float(st.get("remaining_sec", 0.0))
 	else:
 		status_lbl.text = "停止中" if str(st.get("mode", "")) != "off" else "口はトラッキング・アニメーションのまま動きます"
+	if not bool(st.get("active", false)) and str(st.get("last_path", "")) != "":
+		file_lbl.text = str(st.get("last_path", "")).get_file()
 	file_lbl.visible = file_lbl.text != ""
 
 
@@ -171,6 +166,6 @@ func sync(st: Dictionary) -> void:
 	var m := str(ls.get("mode", "audio"))
 	UiWidgets.select_option_by_meta(opt_mode, m)
 	_show_mode(m)
-	sl_intensity.value = float(ls.get("intensity", 1.0))
+	sl_intensity.value = float(ls.get("intensity", LipSyncScript.DEFAULT_INTENSITY))
 	chk_emotion.button_pressed = bool(ls.get("emotion", true))
 	update_live()

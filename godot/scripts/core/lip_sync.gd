@@ -12,7 +12,10 @@ const MEDIA_EXTS := ["mp3", "wav", "ogg", "oga", "flac", "m4a", "aac", "mp4", "m
 var ctl  # app_controller
 var active := false
 var path := ""
-var intensity := 1.0
+## 最後に始めたファイル (止まっても残る。「もう一度」で使う)
+var last_path := ""
+const DEFAULT_INTENSITY := 0.5
+var intensity := DEFAULT_INTENSITY
 var emotion := true
 var _t := 0.0
 var _dur := 0.0
@@ -31,7 +34,7 @@ static func is_media_file(p: String) -> bool:
 
 
 ## params: path (音声・動画ファイル), offset_sec (ファイルのこの位置から始める。既定 0),
-##         intensity (口の開きの倍率 0〜1.5。既定 1), emotion (感情も乗せる。既定は今の設定)
+##         intensity (口の開きの倍率 0〜1.5。既定 0.5), emotion (感情も乗せる。既定は今の設定)
 func start(params: Dictionary) -> Dictionary:
 	if ctl.current_vrm == null:
 		return {"ok": false, "error": "モデルが読み込まれていません"}
@@ -55,6 +58,7 @@ func start(params: Dictionary) -> Dictionary:
 	if params.has("emotion"):
 		emotion = bool(params["emotion"])
 	path = p
+	last_path = p
 	active = true
 	return {"ok": true, "path": p, "duration_sec": snappedf(_dur, 0.01), "start_sec": snappedf(_t, 0.01)}
 
@@ -82,7 +86,7 @@ func remaining_sec() -> float:
 
 func state() -> Dictionary:
 	return {"active": active, "path": path if active else "", "position_sec": snappedf(_t, 0.01) if active else 0.0,
-		"duration_sec": snappedf(_dur, 0.01) if active else 0.0, "intensity": intensity, "emotion": emotion}
+		"duration_sec": snappedf(_dur, 0.01) if active else 0.0, "last_path": last_path, "intensity": intensity, "emotion": emotion}
 
 
 ## 時刻 t の値 (前後のフレームを補間)。i は表の列 (0 = open, 1〜5 = 母音, 6〜8 = 感情)
