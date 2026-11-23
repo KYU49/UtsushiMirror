@@ -339,14 +339,33 @@ impl VrmBridge {
     /// 戻り値: {ok, fps, stride, duration, frames: PackedFloat32Array} / {ok: false, error}
     #[func]
     pub fn analyze_lipsync(&self, path: GString) -> VarDictionary {
+        Self::lipsync_dict(&path.to_string(), false)
+    }
+
+    /// analyze_lipsync に加えて、再生用の音を返す:
+    /// pcm (16 bit リトルエンディアン、左右が交互の PackedByteArray), pcm_rate, pcm_channels
+    #[func]
+    pub fn analyze_lipsync_with_audio(&self, path: GString) -> VarDictionary {
+        Self::lipsync_dict(&path.to_string(), true)
+    }
+}
+
+impl VrmBridge {
+    fn lipsync_dict(path: &str, keep_pcm: bool) -> VarDictionary {
         let mut dict = VarDictionary::new();
-        match lipsync::analyze_file(&path.to_string()) {
-            Ok(a) => {
+        match lipsync::analyze_file_with_pcm(path, keep_pcm) {
+            Ok((a, pcm)) => {
                 dict.set("ok", true);
                 dict.set("fps", lipsync::FPS);
                 dict.set("stride", lipsync::STRIDE as i64);
                 dict.set("duration", a.duration);
                 dict.set("frames", &PackedFloat32Array::from(a.frames.as_slice()));
+                if let Some(p) = pcm {
+                    let bytes: Vec<u8> = p.samples.iter().flat_map(|v| v.to_le_bytes()).collect();
+                    dict.set("pcm", &PackedByteArray::from(bytes.as_slice()));
+                    dict.set("pcm_rate", p.rate as i64);
+                    dict.set("pcm_channels", p.channels as i64);
+                }
             }
             Err(e) => {
                 dict.set("ok", false);

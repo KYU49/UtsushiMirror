@@ -39,29 +39,61 @@ impl Analysis {
     }
 }
 
-/// ファイルを読んで解析する
-pub fn analyze_file(path: &str) -> Result<Analysis, String> {
-    let (samples, rate) = decode_file(path)?;
-    if samples.is_empty() || rate == 0 {
-        return Err("音声が入っていません".into());
-    }
-    Ok(analyze_samples(&samples, rate))
+/// 再生用の音 (16 bit、左右が交互に並ぶ)
+pub struct Pcm {
+    pub samples: Vec<i16>,
+    pub rate: u32,
+    pub channels: u16,
 }
 
-/// ファイルをモノラルにして、解析用に間引いた標本と標本化周波数を返す。
+impl Pcm {
+    fn new(rate: u32, channels: u16) -> Self {
+        Self { samples: Vec::new(), rate, channels }
+    }
+    fn push_frame(&mut self, fr: &[f32]) {
+        // 3 チャンネル以上は、先頭の 2 つ (左右) だけを使う
+        for c in 0..self.channels as usize {
+            let v = fr.get(c).copied().unwrap_or(0.0);
+            self.samples.push((v.clamp(-1.0, 1.0) * 32767.0) as i16);
+        }
+    }
+}
+
+/// 読み込んだ結果。mono / rate は解析用に間引いたもの。pcm は再生用 (頼んだときだけ)
+pub struct Decoded {
+    pub mono: Vec<f32>,
+    pub rate: u32,
+    pub pcm: Option<Pcm>,
+}
+
+/// ファイルを読んで解析する
+pub fn analyze_file(path: &str) -> Result<Analysis, String> {
+    analyze_file_with_pcm(path, false).map(|r| r.0)
+}
+
+/// ファイルを読んで解析し、keep_pcm なら再生用の音も返す
+pub fn analyze_file_with_pcm(path: &str, keep_pcm: bool) -> Result<(Analysis, Option<Pcm>), String> {
+    let d = decode_file(path, keep_pcm)?;
+    if d.mono.is_empty() || d.rate == 0 {
+        return Err("音声が入っていません".into());
+    }
+    Ok((analyze_samples(&d.mono, d.rate), d.pcm))
+}
+
+/// ファイルをモノラルにして、解析用に間引いた標本を返す。
 /// symphonia で読めないとき (webm の Opus など) は、FFmpeg があればそれで取り出す。
-pub fn decode_file(path: &str) -> Result<(Vec<f32>, u32), String> {
+pub fn decode_file(path: &str, keep_pcm: bool) -> Result<Decoded, String> {
     if !Path::new(path).is_file() {
         return Err(format!("ファイルが見つかりません: {path}"));
     }
-    match decode_symphonia(path) {
-        Ok(r) if !r.0.is_empty() => Ok(r),
-        Ok(_) => decode_ffmpeg(path).map_err(|e| format!("音声が見つかりません ({e})")),
-        Err(e1) => decode_ffmpeg(path).map_err(|e2| format!("音声を読めません: {e1} / FFmpeg: {e2}")),
+    match decode_symphonia(path, keep_pcm) {
+        Ok(r) if !r.mono.is_empty() => Ok(r),
+        Ok(_) => decode_ffmpeg(path, keep_pcm).map_err(|e| format!("音声が見つかりません ({e})")),
+        Err(e1) => decode_ffmpeg(path, keep_pcm).map_err(|e2| format!("音声を読めません: {e1} / FFmpeg: {e2}")),
     }
 }
 
-fn decode_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
+fn decode_symphonia(path: &str, keep_pcm: bool) -> Result<Decoded, String> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
     use symphonia::core::errors::Error;
@@ -87,10 +119,12 @@ fn decode_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some())
         .ok_or("音声のトラックがありません")?;
     let track_id = track.id;
+    let rate = track.codec_params.sample_rate.unwrap_or(44100);
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| e.to_string())?;
-    let mut dec = Decimator::new(track.codec_params.sample_rate.unwrap_or(44100));
+    let mut dec = Decimator::new(rate);
+    let mut pcm: Option<Pcm> = None;
     let mut sbuf: Option<SampleBuffer<f32>> = None;
     loop {
         let packet = match format.next_packet() {
@@ -106,6 +140,9 @@ fn decode_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
             Ok(buf) => {
                 let spec = *buf.spec();
                 let ch = spec.channels.count().max(1);
+                if keep_pcm && pcm.is_none() {
+                    pcm = Some(Pcm::new(spec.rate, ch.min(2) as u16));
+                }
                 let need = buf.capacity() as u64;
                 if sbuf.as_ref().is_none_or(|b| b.capacity() < need as usize * ch) {
                     sbuf = Some(SampleBuffer::<f32>::new(need, spec));
@@ -114,20 +151,25 @@ fn decode_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
                 sb.copy_interleaved_ref(buf);
                 for fr in sb.samples().chunks(ch) {
                     dec.push(fr.iter().sum::<f32>() / ch as f32);
+                    if let Some(p) = pcm.as_mut() {
+                        p.push_frame(fr);
+                    }
                 }
             }
             Err(Error::DecodeError(_)) => continue,
             Err(e) => return Err(e.to_string()),
         }
     }
-    Ok(dec.finish())
+    let (mono, r) = dec.finish();
+    Ok(Decoded { mono, rate: r, pcm })
 }
 
-fn decode_ffmpeg(path: &str) -> Result<(Vec<f32>, u32), String> {
+/// FFmpeg で 44.1 kHz の 16 bit ステレオにして取り出す (解析用のモノラルもここから作る)
+fn decode_ffmpeg(path: &str, keep_pcm: bool) -> Result<Decoded, String> {
     use std::process::{Command, Stdio};
-    let rate = TARGET_RATE as u32;
+    let rate = 44100u32;
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "1", "-ar", &rate.to_string(), "-f", "f32le", "-"])
+    cmd.args(["-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "2", "-ar", &rate.to_string(), "-f", "s16le", "-"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -141,8 +183,14 @@ fn decode_ffmpeg(path: &str) -> Result<(Vec<f32>, u32), String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    let samples: Vec<f32> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
-    Ok((samples, rate))
+    let samples: Vec<i16> = out.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+    let mut dec = Decimator::new(rate);
+    for fr in samples.chunks_exact(2) {
+        dec.push((fr[0] as f32 + fr[1] as f32) / 65534.0);
+    }
+    let (mono, r) = dec.finish();
+    let pcm = keep_pcm.then(|| Pcm { samples, rate, channels: 2 });
+    Ok(Decoded { mono, rate: r, pcm })
 }
 
 /// 標本を平均して間引く (TARGET_RATE に近づける)
@@ -557,9 +605,13 @@ mod tests {
         f.extend_from_slice(&(data.len() as u32).to_le_bytes());
         f.extend_from_slice(&data);
         std::fs::write(&path, f).unwrap();
-        let (samples, r) = decode_file(path.to_str().unwrap()).unwrap();
-        assert_eq!(r, 11025);
-        assert!((samples.len() as i64 - s.len() as i64).abs() < 10);
+        let d = decode_file(path.to_str().unwrap(), true).unwrap();
+        assert_eq!(d.rate, 11025);
+        assert!((d.mono.len() as i64 - s.len() as i64).abs() < 10);
+        // 再生用の音は元の 44.1 kHz ステレオのまま
+        let pcm = d.pcm.unwrap();
+        assert_eq!((pcm.rate, pcm.channels), (44100, 2));
+        assert_eq!(pcm.samples.len(), s.len() * 4 * 2);
         let a = analyze_file(path.to_str().unwrap()).unwrap();
         assert!((a.duration - 0.5).abs() < 0.01);
         assert_eq!(argmax(&a.frame(15)[1..6]), 1, "い を当てる");

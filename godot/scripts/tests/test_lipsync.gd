@@ -79,6 +79,11 @@ func _process(_d: float) -> bool:
 			var s: Dictionary = _m.bridge.analyze_lipsync(sample)
 			print("sample ", sample.get_file(), " ok=", s.get("ok"), " dur=", s.get("duration"), " err=", s.get("error", ""))
 			_check("渡されたファイル (%s) を解析できる" % sample.get_extension(), s.get("ok", false))
+			var sa: Dictionary = _m.bridge.analyze_lipsync_with_audio(sample)
+			var bytes_per_sec: float = float(sa.get("pcm_rate", 0)) * int(sa.get("pcm_channels", 0)) * 2.0
+			var pcm_sec: float = sa.get("pcm", PackedByteArray()).size() / maxf(bytes_per_sec, 1.0)
+			print("pcm rate=", sa.get("pcm_rate"), " ch=", sa.get("pcm_channels"), " sec=", pcm_sec)
+			_check("渡されたファイル (%s) から再生用の音を取り出せる" % sample.get_extension(), absf(pcm_sec - float(s.get("duration", 0.0))) < 0.1)
 		# 選択: 既定は「音声から」。テキストの命令は断る
 		_check("口の動きの既定は「音声から」", _m.lipsync_mode == "audio")
 		_check("口の開きの既定は 0.5", is_equal_approx(_m.lip_sync.intensity, 0.5))
@@ -158,7 +163,20 @@ func _process(_d: float) -> bool:
 		_check("ドロップで始めたものも「もう一度」で始められる", _m.lip_sync.active and _m.lip_sync.path == _wav2)
 		_check("口の開きは mouth_open で保存する", _m.build_config_dict()["lipsync"].has("mouth_open"))
 		_m.lip_sync.stop()
-	if _f == 300:
+		_check("音を鳴らすのは既定でオフ", not _m.lip_sync.play_audio)
+		# 音も鳴らす (テストなので音量 0)
+		var r2: Dictionary = _m.start_lipsync({"path": _wav, "play_audio": true, "volume": 0.0})
+		print("play ", r2)
+		_check("音を鳴らして始められる", r2.get("ok", false) and r2.get("play_audio", false))
+	if _f == 320:
+		var ap: float = _m.lip_sync._audio_position()
+		print("audio %.3f / lips %.3f" % [ap, _m.lip_sync._t])
+		_check("鳴らしている間は口の時間が音の位置に合う", _m.lip_sync.is_playing_audio() and absf(ap - _m.lip_sync._t) < 0.1)
+		_check("音を鳴らす設定は保存される", bool(_m.build_config_dict()["lipsync"].get("play_audio", false)))
+		_m.lip_sync.stop()
+		_check("止めると音も止まる", not _m.lip_sync.is_playing_audio())
+		_m.lip_sync.play_audio = false
+	if _f == 330:
 		print("TEST_LIPSYNC_RESULT=", "PASS" if _ok else "FAIL")
 		return true
 	return false

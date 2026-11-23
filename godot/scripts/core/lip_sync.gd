@@ -1,5 +1,5 @@
 extends RefCounted
-## 音声・動画ファイルに合わせて口を動かす (リップシンク)。音は鳴らさない。
+## 音声・動画ファイルに合わせて口を動かす (リップシンク)。play_audio なら音も鳴らし、口を音の再生位置に合わせる。
 ## 読み込むときに 1 回だけ解析し (VrmBridge.analyze_lipsync、rust/vrm-gdext/src/lipsync.rs)、
 ## 再生中は 1/60 秒ごとの表を時間に合わせて引くだけ。口 (aa〜oh) と、軽い感情 (happy / surprised / sad) だけを書く。
 ## app_controller の _process から毎フレーム process() を呼ぶ。
@@ -17,6 +17,11 @@ var last_path := ""
 const DEFAULT_INTENSITY := 0.5
 var intensity := DEFAULT_INTENSITY
 var emotion := true
+## 音も鳴らす (既定は鳴らさない。別のソフトで流す音に合わせる使い方のため)
+var play_audio := false
+## 鳴らすときの音量 (0〜1)
+var volume := 1.0
+var _player: AudioStreamPlayer = null
 var _t := 0.0
 var _dur := 0.0
 var _fps := 60.0
@@ -34,7 +39,8 @@ static func is_media_file(p: String) -> bool:
 
 
 ## params: path (音声・動画ファイル), offset_sec (ファイルのこの位置から始める。既定 0),
-##         intensity (口の開きの倍率 0〜1.5。既定 0.5), emotion (感情も乗せる。既定は今の設定)
+##         intensity (口の開きの倍率 0〜1.5。既定 0.5), emotion (感情も乗せる。既定は今の設定),
+##         play_audio (音も鳴らす。既定は今の設定), volume (音量 0〜1。既定は今の設定)
 func start(params: Dictionary) -> Dictionary:
 	if ctl.current_vrm == null:
 		return {"ok": false, "error": "モデルが読み込まれていません"}
@@ -44,7 +50,12 @@ func start(params: Dictionary) -> Dictionary:
 	if p == "":
 		return {"ok": false, "error": "path (音声・動画ファイル) を指定してください"}
 	p = ctl._resolve_input_path(p)
-	var res: Dictionary = ctl.bridge.analyze_lipsync(p)
+	if params.has("play_audio"):
+		play_audio = bool(params["play_audio"])
+	if params.has("volume"):
+		volume = clampf(float(params["volume"]), 0.0, 1.0)
+	# 鳴らすときは、解析と一緒に再生用の音も受け取る (mp4 や webm も同じように鳴らせる)
+	var res: Dictionary = ctl.bridge.analyze_lipsync_with_audio(p) if play_audio else ctl.bridge.analyze_lipsync(p)
 	if not res.get("ok", false):
 		return {"ok": false, "error": str(res.get("error", "解析に失敗しました"))}
 	stop()
@@ -60,10 +71,47 @@ func start(params: Dictionary) -> Dictionary:
 	path = p
 	last_path = p
 	active = true
-	return {"ok": true, "path": p, "duration_sec": snappedf(_dur, 0.01), "start_sec": snappedf(_t, 0.01)}
+	if play_audio and res.has("pcm"):
+		_play_pcm(res, _t)
+	return {"ok": true, "path": p, "duration_sec": snappedf(_dur, 0.01), "start_sec": snappedf(_t, 0.01), "play_audio": is_playing_audio()}
+
+
+func _play_pcm(res: Dictionary, from_sec: float) -> void:
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = int(res.get("pcm_rate", 44100))
+	w.stereo = int(res.get("pcm_channels", 2)) >= 2
+	w.data = res["pcm"]
+	if _player == null or not is_instance_valid(_player):
+		_player = AudioStreamPlayer.new()
+		_player.name = "LipSyncAudio"
+		ctl.add_child(_player)
+	_player.stream = w
+	set_volume(volume)
+	_player.play(from_sec)
+
+
+func is_playing_audio() -> bool:
+	return _player != null and is_instance_valid(_player) and _player.playing
+
+
+func set_volume(v: float) -> void:
+	volume = clampf(v, 0.0, 1.0)
+	if _player != null and is_instance_valid(_player):
+		_player.volume_db = linear_to_db(maxf(volume, 0.0001))
+
+
+## 鳴らしている音の、今聞こえている位置 (秒)。鳴らしていなければ -1
+func _audio_position() -> float:
+	if not is_playing_audio():
+		return -1.0
+	return maxf(0.0, _player.get_playback_position() + AudioServer.get_time_since_last_mix() - AudioServer.get_output_latency())
 
 
 func stop() -> void:
+	if _player != null and is_instance_valid(_player):
+		_player.stop()
+		_player.stream = null  # 音のデータを手放す
 	if not active:
 		return
 	active = false
@@ -86,7 +134,8 @@ func remaining_sec() -> float:
 
 func state() -> Dictionary:
 	return {"active": active, "path": path if active else "", "position_sec": snappedf(_t, 0.01) if active else 0.0,
-		"duration_sec": snappedf(_dur, 0.01) if active else 0.0, "last_path": last_path, "intensity": intensity, "emotion": emotion}
+		"duration_sec": snappedf(_dur, 0.01) if active else 0.0, "last_path": last_path, "intensity": intensity, "emotion": emotion,
+		"play_audio": play_audio, "volume": volume, "playing_audio": is_playing_audio()}
 
 
 ## 時刻 t の値 (前後のフレームを補間)。i は表の列 (0 = open, 1〜5 = 母音, 6〜8 = 感情)
@@ -123,8 +172,14 @@ func process(dt: float) -> void:
 	if ctl.current_vrm == null:
 		active = false
 		_emo_applied.clear()
+		if is_playing_audio():
+			_player.stop()
 		return
 	_t += dt
+	# 音を鳴らしているときは、聞こえている位置に合わせる (ずれが 50 ms を超えたら直す)
+	var ap := _audio_position()
+	if ap > 0.0 and absf(ap - _t) > 0.05:
+		_t = ap
 	if _t >= _dur:
 		stop()
 		return

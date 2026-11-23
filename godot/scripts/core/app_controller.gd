@@ -1128,7 +1128,7 @@ func build_config_dict() -> Dictionary:
 		"hotkeys": hotkey_manager.to_dict(),
 		"api": {"ws_port": ws_port, "osc_port": osc_port},
 		"tracking": tracking.settings.duplicate(),
-		"lipsync": {"mode": lipsync_mode, "mouth_open": lip_sync.intensity, "emotion": lip_sync.emotion},
+		"lipsync": {"mode": lipsync_mode, "mouth_open": lip_sync.intensity, "emotion": lip_sync.emotion, "play_audio": lip_sync.play_audio, "volume": lip_sync.volume},
 	}
 
 
@@ -1225,6 +1225,8 @@ func _apply_config_dict(cfg: Dictionary) -> void:
 		# 最初の版は "intensity" (既定 1.0) で保存していた。既定を 0.5 に変えたので、その値は読まない
 		lip_sync.intensity = clampf(float(ls.get("mouth_open", lip_sync.intensity)), 0.0, 1.5)
 		lip_sync.emotion = bool(ls.get("emotion", lip_sync.emotion))
+		lip_sync.play_audio = bool(ls.get("play_audio", lip_sync.play_audio))
+		lip_sync.set_volume(float(ls.get("volume", lip_sync.volume)))
 	if cfg.has("tracking") and typeof(cfg["tracking"]) == TYPE_DICTIONARY:
 		tracking.apply_settings(cfg["tracking"])
 	var last_vrm := str(cfg.get("last_vrm_path", ""))

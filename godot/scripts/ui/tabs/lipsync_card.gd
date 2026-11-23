@@ -14,6 +14,8 @@ var opt_mode: OptionButton
 var audio_box: VBoxContainer
 var text_box: VBoxContainer
 var chk_emotion: CheckBox
+var chk_play: CheckBox
+var sl_volume: HSlider
 var sl_intensity: HSlider
 var file_lbl: Label
 var status_lbl: Label
@@ -39,7 +41,7 @@ func build(win, vb: VBoxContainer) -> void:
 	audio_box = VBoxContainer.new()
 	audio_box.add_theme_constant_override("separation", 7)
 	body.add_child(audio_box)
-	UiWidgets.note(audio_box, "音声・動画ファイル (mp3 / wav / ogg / flac / m4a / mp4 / mov / mkv など) に口を合わせます。音は鳴らしません。別のソフトで流す音と同時に始めてください。ファイルをウィンドウへドロップしても始まります。")
+	UiWidgets.note(audio_box, "音声・動画ファイル (mp3 / wav / ogg / flac / m4a / mp4 / mov / mkv など) に口を合わせます。「音も鳴らす」がオフのときは、別のソフトで流す音と同時に始めてください。ファイルをウィンドウへドロップしても始まります。")
 	var exts := PackedStringArray()
 	for e in LipSyncScript.MEDIA_EXTS:
 		exts.append("*." + str(e))
@@ -83,6 +85,16 @@ func build(win, vb: VBoxContainer) -> void:
 		if _ctl() != null:
 			_ctl().lip_sync.emotion = v
 	, is_sync)
+	chk_play = UiWidgets.check(audio_box, "音も鳴らす", false, func(v: bool):
+		if _ctl() != null:
+			_ctl().lip_sync.play_audio = v
+		sl_volume.get_parent().visible = v
+	, is_sync)
+	sl_volume = UiWidgets.slider(audio_box, "音量", 0.0, 1.0, 0.05, 1.0, func(v: float):
+		if _ctl() != null:
+			_ctl().lip_sync.set_volume(v)
+	, is_sync)
+	sl_volume.get_parent().visible = false
 
 	# ---- テキストから
 	text_box = VBoxContainer.new()
@@ -150,7 +162,7 @@ func update_live() -> void:
 		return
 	var st: Dictionary = _ctl().lipsync_state()
 	if bool(st.get("active", false)):
-		status_lbl.text = "● 音声に合わせています  残り %.1f 秒" % float(st.get("remaining_sec", 0.0))
+		status_lbl.text = "● %s  残り %.1f 秒" % ["音を鳴らして合わせています" if bool(st.get("playing_audio", false)) else "音声に合わせています", float(st.get("remaining_sec", 0.0))]
 		file_lbl.text = str(st.get("path", "")).get_file()
 	elif bool(st.get("talking", false)):
 		status_lbl.text = "● しゃべっています  残り %.1f 秒" % float(st.get("remaining_sec", 0.0))
@@ -168,4 +180,7 @@ func sync(st: Dictionary) -> void:
 	_show_mode(m)
 	sl_intensity.value = float(ls.get("intensity", LipSyncScript.DEFAULT_INTENSITY))
 	chk_emotion.button_pressed = bool(ls.get("emotion", true))
+	chk_play.button_pressed = bool(ls.get("play_audio", false))
+	sl_volume.value = float(ls.get("volume", 1.0))
+	sl_volume.get_parent().visible = chk_play.button_pressed
 	update_live()

@@ -428,14 +428,16 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "vrm_lipsync",
-            "description": "Lip-sync the mouth to an audio or video file (mp3, wav, ogg, flac, m4a, mp4, mov, mkv, webm...). The file is analyzed once (lightweight, no AI model) and the mouth shapes (aa/ih/ou/ee/oh) follow the voice; optionally light emotions (happy/surprised/sad) from pitch and loudness. The app does NOT play the sound: start your own playback at the same moment. Only the mouth is driven, so tracking and animations keep working. Works only when the lip sync mode is `audio` (the default; see vrm_set_lipsync_mode). Returns the duration in seconds.",
+            "description": "Lip-sync the mouth to an audio or video file (mp3, wav, ogg, flac, m4a, mp4, mov, mkv, webm...). The file is analyzed once (lightweight, no AI model) and the mouth shapes (aa/ih/ou/ee/oh) follow the voice; optionally light emotions (happy/surprised/sad) from pitch and loudness. By default the app does NOT play the sound (start your own playback at the same moment); set `play_audio` to play it in the app, and the mouth then follows the actual playback position. Only the mouth is driven, so tracking and animations keep working. Works only when the lip sync mode is `audio` (the default; see vrm_set_lipsync_mode). Returns the duration in seconds.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Absolute path of the audio or video file." },
                     "offset_sec": { "type": "number", "default": 0, "description": "Start from this position in the file (seconds)." },
                     "intensity": { "type": "number", "default": 0.5, "description": "Mouth opening multiplier, 0-1.5." },
-                    "emotion": { "type": "boolean", "description": "Also add light emotions estimated from the voice. Defaults to the app setting." }
+                    "emotion": { "type": "boolean", "description": "Also add light emotions estimated from the voice. Defaults to the app setting." },
+                    "play_audio": { "type": "boolean", "description": "Also play the sound in the app. Defaults to the app setting (off unless changed)." },
+                    "volume": { "type": "number", "description": "Playback volume 0-1 when play_audio is on. Defaults to the app setting." }
                 },
                 "required": ["path"]
             }
