@@ -254,12 +254,14 @@ func build(win, vb: VBoxContainer) -> void:
 			_win.show_snackbar("書き出し失敗: " + str(res.get("error", "")))
 	, "effects.umshader")
 
-	_dlg_import = UiWidgets.file_dialog(_win, FileDialog.FILE_MODE_OPEN_FILE, PackedStringArray(["*.umshader ; UtsushiMirror Shader"]), func(p: String):
+	# 設定ファイル (.umset) も選べる。そのときはシェーダーの部分だけを読み込む
+	_dlg_import = UiWidgets.file_dialog(_win, FileDialog.FILE_MODE_OPEN_FILE, PackedStringArray(["*.umshader, *.umset ; UtsushiMirror Shader / Settings", "*.umshader ; UtsushiMirror Shader", "*.umset ; UtsushiMirror Settings"]), func(p: String):
 		if _win.controller == null:
 			return
 		var res: Dictionary = _win.controller.import_effects(p)
 		if res.get("ok", false):
-			_win.show_snackbar("シェーダー設定を読み込みました: " + p.get_file())
+			var part := " (シェーダーの部分だけ)" if p.to_lower().ends_with(".umset") else ""
+			_win.show_snackbar("シェーダー設定を読み込みました%s: %s" % [part, p.get_file()])
 		else:
 			_win.show_snackbar("読み込み失敗: " + str(res.get("error", "")))
 	)

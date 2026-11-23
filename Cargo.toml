@@ -27,6 +27,8 @@ clap = { version = "4.6", features = ["derive"] }
 base64 = "0.23"
 thiserror = "2.0"
 anyhow = "1.0"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "pcm", "ogg", "vorbis", "flac", "isomp4", "aac", "mkv"] }
+rustfft = "6"
 godot = { version = "0.5.5", features = ["api-4-7"] }
 windows = { version = "0.62", features = [
     "Win32_Foundation",

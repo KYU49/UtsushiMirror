@@ -18,6 +18,8 @@ futures-util.workspace = true
 rosc.workspace = true
 crossbeam-channel.workspace = true
 base64.workspace = true
+symphonia.workspace = true
+rustfft.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

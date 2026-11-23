@@ -165,7 +165,10 @@ func step(dt: float) -> void:
 		lookat_exprs = lookat.compute_and_apply(humanoid, tgt, active, 1.0)
 
 	# Merge any VRMA expression channels without clobbering manual expressions
+	var mouth_locked: bool = expressions != null and expressions.mouth_locked
 	for ename in anim_exprs.keys():
+		if mouth_locked and VrmExpressionsScript.MOUTH_SET.has(ename):
+			continue  # リップシンクの間は、アニメの口を使わない
 		if not lookat_exprs.has(ename):
 			lookat_exprs[ename] = anim_exprs[ename]
 

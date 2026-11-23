@@ -12,6 +12,8 @@ const VrmaLoaderScript := preload("res://scripts/vrm/vrma_loader.gd")
 const AnimCategoryScript := preload("res://scripts/core/anim_category.gd")
 const NpzMotionLoaderScript := preload("res://scripts/vrm/npz_motion_loader.gd")
 const MotionDirectorScript := preload("res://scripts/core/motion_director.gd")
+const LipSyncScript := preload("res://scripts/core/lip_sync.gd")
+const VrmExpressionsScript := preload("res://scripts/vrm/vrm_expressions.gd")
 const ProceduralIdleScript := preload("res://scripts/core/procedural_idle.gd")
 const TrackingManagerScript := preload("res://scripts/core/tracking_manager.gd")
 const PostEffectsScript := preload("res://scripts/core/post_effects.gd")
@@ -45,6 +47,11 @@ var current_vrm = null
 var vrma_player
 ## 外部からの「しゃべる」「歩く」
 var motion
+var lip_sync
+## 口の動きをどこから作るか: "off" (なし) / "audio" (音声から) / "text" (テキストから)
+var lipsync_mode: String = "audio"
+const LIPSYNC_MODES := ["off", "audio", "text"]
+const LIPSYNC_MODE_NAMES := {"off": "なし", "audio": "音声から", "text": "テキストから"}
 var procedural_idle
 var recent_vrm_paths: Array[String] = []
 ## 書き出した・読み込んだ設定ファイル (.umset) の場所。新しい順。
@@ -105,6 +112,7 @@ func _ready() -> void:
 
 	vrma_player = VrmaLoaderScript.VrmaPlayer.new()
 	motion = MotionDirectorScript.new(self)
+	lip_sync = LipSyncScript.new(self)
 	procedural_idle = ProceduralIdleScript.new()
 	_preload_bundled_animations()
 	reload_animation_presets()
@@ -202,6 +210,53 @@ func _on_files_dropped(files: PackedStringArray) -> void:
 			load_vrm(path)
 		elif lower.ends_with(".vrma") or lower.ends_with(".npz"):
 			load_vrma_file(path, "", true)
+		elif LipSyncScript.is_media_file(path):
+			var r: Dictionary = start_lipsync({"path": path})
+			if settings_window != null:
+				if r.get("ok", false):
+					settings_window.show_snackbar("音声に口を合わせています: %s (%.1f 秒)" % [path.get_file(), float(r.get("duration_sec", 0.0))])
+				else:
+					settings_window.show_snackbar("リップシンクできません: " + str(r.get("error", "")))
+
+
+# ---------------------------------------------------------------- リップシンク
+## 口の動きの元を選ぶ。選び直したら、動いている方を止めて口を閉じる
+func set_lipsync_mode(mode: String) -> Dictionary:
+	if not mode in LIPSYNC_MODES:
+		return {"ok": false, "error": "mode は off / audio / text のどれかです"}
+	if mode != lipsync_mode:
+		lip_sync.stop()
+		motion.stop_talk()
+		lipsync_mode = mode
+		state_changed.emit()
+	return {"ok": true, "mode": lipsync_mode}
+
+
+func _lipsync_mode_error(want: String) -> Dictionary:
+	return {"ok": false, "error": "口の動きが「%s」になっています。「%s」に切り替えると使えます (設定のトラッキング → リップシンク、または vrm_set_lipsync_mode で mode=%s)" % [
+		LIPSYNC_MODE_NAMES[lipsync_mode], LIPSYNC_MODE_NAMES[want], want]}
+
+
+## 音声・動画ファイルに口を合わせる (口の動きが「音声から」のときだけ)
+func start_lipsync(params: Dictionary) -> Dictionary:
+	if lipsync_mode != "audio":
+		return _lipsync_mode_error("audio")
+	return lip_sync.start(params)
+
+
+## 文から口を動かす (口の動きが「テキストから」のときだけ)
+func start_text_talk(params: Dictionary) -> Dictionary:
+	if lipsync_mode != "text":
+		return _lipsync_mode_error("text")
+	return motion.start_talk(params)
+
+
+func lipsync_state() -> Dictionary:
+	var d: Dictionary = lip_sync.state() if lip_sync != null else {}
+	d["mode"] = lipsync_mode
+	d["talking"] = motion.talking if motion != null else false
+	d["remaining_sec"] = snappedf(lip_sync.remaining_sec() if lip_sync != null and lip_sync.active else (motion.state().get("talk_remaining_sec", 0.0) if motion != null else 0.0), 0.01)
+	return d
 
 
 func _exit_tree() -> void:
@@ -223,6 +278,9 @@ func _process(delta: float) -> void:
 	if current_vrm != null:
 		current_vrm.lookat_world_target = camera_rig.get_camera_world_position()
 	motion.process(delta)
+	lip_sync.process(delta)
+	if current_vrm != null and current_vrm.expressions != null:
+		current_vrm.expressions.mouth_locked = lip_sync.active or motion.talking
 
 	capture_manager.process_frame(delta)
 
@@ -350,7 +408,7 @@ func _dispatch_rpc(client_id: int, id_json: String, method: String, params: Dict
 		"ping":
 			_reply_ok(client_id, id_json, {"pong": true, "ws_port": ws_port, "osc_port": osc_port})
 		"talk":
-			var tres: Dictionary = motion.start_talk(params)
+			var tres: Dictionary = start_text_talk(params)
 			if tres.get("ok", false):
 				_reply_ok(client_id, id_json, tres)
 			else:
@@ -378,6 +436,21 @@ func _dispatch_rpc(client_id: int, id_json: String, method: String, params: Dict
 			_reply_ok(client_id, id_json, get_model_transform_dict())
 		"get_motion_state":
 			_reply_ok(client_id, id_json, motion.state())
+		"lipsync":
+			var lres: Dictionary = start_lipsync(params)
+			if lres.get("ok", false):
+				_reply_ok(client_id, id_json, lres)
+			else:
+				_reply_err(client_id, id_json, -32602, str(lres.get("error", "lipsync failed")))
+		"stop_lipsync":
+			lip_sync.stop()
+			_reply_ok(client_id, id_json, lip_sync.state())
+		"set_lipsync_mode":
+			var mres: Dictionary = set_lipsync_mode(str(params.get("mode", "")))
+			if mres.get("ok", false):
+				_reply_ok(client_id, id_json, mres)
+			else:
+				_reply_err(client_id, id_json, -32602, str(mres.get("error", "")))
 		"reload_presets":
 			_reply_ok(client_id, id_json, {"animations": reload_animation_presets(), "shaders": list_shader_presets()})
 		"apply_shader_preset":
@@ -647,6 +720,8 @@ func _poll_vmc() -> void:
 				continue
 			if _manual_expr_overrides.has(ek):
 				continue
+			if current_vrm.expressions.mouth_locked and VrmExpressionsScript.MOUTH_SET.has(ek):
+				continue  # リップシンクの間は、トラッキングの口を使わない
 			mapped[ek] = float(blends[k])
 		if not mapped.is_empty():
 			current_vrm.expressions.set_weights(mapped, 0.0, false)
@@ -1048,6 +1123,7 @@ func build_config_dict() -> Dictionary:
 		"hotkeys": hotkey_manager.to_dict(),
 		"api": {"ws_port": ws_port, "osc_port": osc_port},
 		"tracking": tracking.settings.duplicate(),
+		"lipsync": {"mode": lipsync_mode, "intensity": lip_sync.intensity, "emotion": lip_sync.emotion},
 	}
 
 
@@ -1065,6 +1141,7 @@ func get_full_state() -> Dictionary:
 		"animation_categories": _animation_categories(),
 		"shader_presets": list_shader_presets().map(func(x): return x.name),
 		"motion": motion.state() if motion != null else {},
+		"lipsync": lipsync_state(),
 		"animation": _anim_state_dict(),
 		"idle": procedural_idle.get_params(),
 		"expressions": _expr_weights_dict(),
@@ -1136,6 +1213,12 @@ func _apply_config_dict(cfg: Dictionary) -> void:
 	if cfg.has("api") and typeof(cfg["api"]) == TYPE_DICTIONARY:
 		ws_port = int(cfg["api"].get("ws_port", ws_port))
 		osc_port = int(cfg["api"].get("osc_port", osc_port))
+	if cfg.has("lipsync") and typeof(cfg["lipsync"]) == TYPE_DICTIONARY:
+		var ls: Dictionary = cfg["lipsync"]
+		if str(ls.get("mode", "")) in LIPSYNC_MODES:
+			set_lipsync_mode(str(ls["mode"]))
+		lip_sync.intensity = clampf(float(ls.get("intensity", lip_sync.intensity)), 0.0, 1.5)
+		lip_sync.emotion = bool(ls.get("emotion", lip_sync.emotion))
 	if cfg.has("tracking") and typeof(cfg["tracking"]) == TYPE_DICTIONARY:
 		tracking.apply_settings(cfg["tracking"])
 	var last_vrm := str(cfg.get("last_vrm_path", ""))
@@ -2115,11 +2198,19 @@ func export_effects(path: String) -> Dictionary:
 	return {"ok": true, "path": path}
 
 
+## シェーダー設定のファイル (.umshader) か、設定ファイル (.umset) のシェーダーの部分だけを読み込む。
 func import_effects(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {"ok": false, "error": "ファイルがありません"}
 	var data = JSON.parse_string(FileAccess.get_file_as_string(path))
-	if typeof(data) != TYPE_DICTIONARY or str(data.get("kind", "")) != EFFECTS_FILE_KIND:
+	if typeof(data) != TYPE_DICTIONARY:
+		return {"ok": false, "error": "シェーダー設定のファイルではありません"}
+	var kind := str(data.get("kind", ""))
+	if kind == SETTINGS_FILE_KIND or (kind == "" and data.has("version") and data.has("camera")):
+		# 設定ファイル (.umset) からは、シェーダーの部分 (画面効果と落ち影) だけを取り出す
+		var lt = data.get("lighting", {})
+		data = {"effects": data.get("effects"), "shadow": lt if typeof(lt) == TYPE_DICTIONARY else {}}
+	elif kind != EFFECTS_FILE_KIND:
 		return {"ok": false, "error": "シェーダー設定のファイルではありません"}
 	if typeof(data.get("effects")) == TYPE_DICTIONARY:
 		post_effects.load_dict(data["effects"])

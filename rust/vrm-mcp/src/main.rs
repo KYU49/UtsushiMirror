@@ -410,7 +410,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "vrm_talk",
-            "description": "Move the mouth naturally as if speaking. Give the sentence in `text` (Japanese kana are mapped to the matching mouth shapes; kanji and English get plausible shapes) and/or a length in `duration_sec`. Returns the duration in seconds. Does not play audio.",
+            "description": "Move the mouth naturally as if speaking. Give the sentence in `text` (Japanese kana are mapped to the matching mouth shapes; kanji and English get plausible shapes) and/or a length in `duration_sec`. Returns the duration in seconds. Does not play audio. Works only when the lip sync mode is `text` (see vrm_set_lipsync_mode); while it runs, the mouth ignores tracking and animation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -425,6 +425,34 @@ fn tool_definitions() -> Value {
             "name": "vrm_stop_talk",
             "description": "Stop the mouth movement started by vrm_talk and close the mouth.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "vrm_lipsync",
+            "description": "Lip-sync the mouth to an audio or video file (mp3, wav, ogg, flac, m4a, mp4, mov, mkv, webm...). The file is analyzed once (lightweight, no AI model) and the mouth shapes (aa/ih/ou/ee/oh) follow the voice; optionally light emotions (happy/surprised/sad) from pitch and loudness. The app does NOT play the sound: start your own playback at the same moment. Only the mouth is driven, so tracking and animations keep working. Works only when the lip sync mode is `audio` (the default; see vrm_set_lipsync_mode). Returns the duration in seconds.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute path of the audio or video file." },
+                    "offset_sec": { "type": "number", "default": 0, "description": "Start from this position in the file (seconds)." },
+                    "intensity": { "type": "number", "default": 1.0, "description": "Mouth opening multiplier, 0-1.5." },
+                    "emotion": { "type": "boolean", "description": "Also add light emotions estimated from the voice. Defaults to the app setting." }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "vrm_stop_lipsync",
+            "description": "Stop the lip sync started by vrm_lipsync and close the mouth.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "vrm_set_lipsync_mode",
+            "description": "Choose what drives the mouth: `off` (only tracking / animation), `audio` (vrm_lipsync from an audio or video file) or `text` (vrm_talk from a sentence). Only the chosen kind of command is accepted. Changing the mode stops the running one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "mode": { "type": "string", "enum": ["off", "audio", "text"] } },
+                "required": ["mode"]
+            }
         },
         {
             "name": "vrm_walk",
@@ -500,6 +528,9 @@ fn rpc_method_for_tool(name: &str) -> Option<(&'static str, bool)> {
         "vrm_set_vcam" => ("set_vcam", false),
         "vrm_talk" => ("talk", false),
         "vrm_stop_talk" => ("stop_talk", true),
+        "vrm_lipsync" => ("lipsync", false),
+        "vrm_stop_lipsync" => ("stop_lipsync", true),
+        "vrm_set_lipsync_mode" => ("set_lipsync_mode", false),
         "vrm_walk" => ("walk", false),
         "vrm_stop_walk" => ("stop_walk", true),
         "vrm_apply_shader_preset" => ("apply_shader_preset", false),

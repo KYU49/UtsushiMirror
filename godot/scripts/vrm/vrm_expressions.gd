@@ -33,6 +33,9 @@ var _bound_morph_slots: Array = [] # [{mi: MeshInstance3D, index: int}]
 var _prev_effective: Dictionary = {}
 var _prev_result: Dictionary = {}
 var _applied_once: bool = false
+## リップシンク (音声・テキスト) が口を動かしている間は true。
+## アニメ・トラッキングの口を混ぜず、ほかの表情の overrideMouth でも口を抑えない (app_controller が毎フレーム決める)
+var mouth_locked: bool = false
 
 
 class ExpressionDef:
@@ -256,7 +259,8 @@ func update(dt: float, lookat_expr_weights: Dictionary = {}, auto_blink_weight: 
 		var def: ExpressionDef = expressions[ename]
 		blink_mul = _apply_override(blink_mul, def.override_blink, w)
 		lookat_mul = _apply_override(lookat_mul, def.override_lookat, w)
-		mouth_mul = _apply_override(mouth_mul, def.override_mouth, w)
+		if not mouth_locked:
+			mouth_mul = _apply_override(mouth_mul, def.override_mouth, w)
 
 	var effective: Dictionary = {}
 	for ename in expressions.keys():

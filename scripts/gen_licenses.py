@@ -37,7 +37,7 @@ SOFTWARE."""
 
 def rust_crates() -> list[dict]:
     out = subprocess.run(["cargo", "metadata", "--format-version", "1", "--offline"],
-                         cwd=ROOT, capture_output=True, text=True, check=True).stdout
+                         cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=True).stdout
     meta = json.loads(out)
     ws = set(meta["workspace_members"])
     pkgs = [p for p in meta["packages"] if p["id"] not in ws]

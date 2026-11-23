@@ -3,8 +3,10 @@ extends RefCounted
 const TrackingManagerScript := preload("res://scripts/core/tracking_manager.gd")
 const UiTheme := preload("res://scripts/ui/ui_theme.gd")
 const UiWidgets := preload("res://scripts/ui/ui_widgets.gd")
+const LipSyncCardScript := preload("res://scripts/ui/tabs/lipsync_card.gd")
 
 var _win
+var lipsync_card = LipSyncCardScript.new()
 
 # テスト契約 (test_tracker_install.gd / test_tracking_ui.gd) 互換フィールド
 var _install_box: VBoxContainer
@@ -132,6 +134,9 @@ func build(win, vb: VBoxContainer) -> void:
 	_calib_lbl = Label.new()
 	_calib_lbl.theme_type_variation = "MutedLabel"
 	c_ctl["body"].add_child(_calib_lbl)
+
+	# ---- リップシンク (音声・テキスト)。中身は lipsync_card.gd
+	lipsync_card.build(win, vb)
 
 	# ---- カメラ設定
 	var c_cam: Dictionary = UiWidgets.card(vb, "カメラ設定")
@@ -401,6 +406,7 @@ func on_installed(_ok: bool) -> void:
 func update_live() -> void:
 	if _win.controller == null or _win.controller.tracking == null:
 		return
+	lipsync_card.update_live()
 	var trk = _win.controller.tracking
 	var td: Dictionary = trk.to_dict()
 	var running := bool(td.get("running", false))
@@ -427,6 +433,7 @@ func update_live() -> void:
 
 func sync(st: Dictionary) -> void:
 	refresh_install()
+	lipsync_card.sync(st)
 	var tr: Dictionary = st.get("tracking", {})
 	var running := bool(tr.get("running", false))
 	_start_btn.text = "トラッキング停止" if running else "トラッキング開始"

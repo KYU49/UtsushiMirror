@@ -1,3 +1,4 @@
+pub mod lipsync;
 pub mod osc_receiver;
 pub mod platform;
 pub mod recorder;
@@ -332,6 +333,27 @@ impl VrmBridge {
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes.as_slice());
         GString::from(&b64)
+    }
+
+    /// 音声・動画ファイルから、口の動きと感情の表を作る (lipsync.rs)。
+    /// 戻り値: {ok, fps, stride, duration, frames: PackedFloat32Array} / {ok: false, error}
+    #[func]
+    pub fn analyze_lipsync(&self, path: GString) -> VarDictionary {
+        let mut dict = VarDictionary::new();
+        match lipsync::analyze_file(&path.to_string()) {
+            Ok(a) => {
+                dict.set("ok", true);
+                dict.set("fps", lipsync::FPS);
+                dict.set("stride", lipsync::STRIDE as i64);
+                dict.set("duration", a.duration);
+                dict.set("frames", &PackedFloat32Array::from(a.frames.as_slice()));
+            }
+            Err(e) => {
+                dict.set("ok", false);
+                dict.set("error", &GString::from(&e));
+            }
+        }
+        dict
     }
 }
 
