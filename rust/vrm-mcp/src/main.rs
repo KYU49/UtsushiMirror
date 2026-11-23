@@ -336,7 +336,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "vrm_start_recording",
-            "description": "Start real-time video recording to MP4 or transparent WebM VP9. The recording uses the output viewport, whose background is transparent by default (black in MP4): call vrm_set_output_viewport with background_mode \"match_main\" first to record the main screen's background.",
+            "description": "Start real-time video recording to MP4 or transparent WebM VP9. The recording uses the output viewport, whose background is transparent by default (black in MP4): call vrm_set_output_viewport with background_mode \"match_main\" first to record the main screen's background. Audio from vrm_lipsync files played while recording is added to the file when recording stops (lipsync_audio).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -344,7 +344,8 @@ fn tool_definitions() -> Value {
                     "format": { "type": "string", "enum": ["mp4", "webm_alpha"], "default": "mp4" },
                     "fps": { "type": "integer", "default": 60 },
                     "width": { "type": "integer" },
-                    "height": { "type": "integer" }
+                    "height": { "type": "integer" },
+                    "lipsync_audio": { "type": "boolean", "description": "Mix the audio of files played by vrm_lipsync during the recording into the video after it stops (default: the app setting, on)." }
                 }
             }
         },

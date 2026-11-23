@@ -14,6 +14,7 @@ var _dlg_out_img: FileDialog
 var _lbl_dirs: Label
 var _opt_fmt: OptionButton
 var _opt_fps: OptionButton
+var _chk_rec_audio: CheckBox
 var _btn_rec: Button
 
 var _chk_spout: CheckBox
@@ -125,6 +126,11 @@ func build(win, vb: VBoxContainer) -> void:
 		["30", "30 FPS"],
 		["60", "60 FPS"],
 	], func(_v: String): pass, is_sync)
+	_chk_rec_audio = UiWidgets.check(c_cap["body"], "リップシンクの音も録画に入れる", true, func(on: bool):
+		if _win.controller != null:
+			_win.controller.capture_manager.record_lipsync_audio = on
+	, is_sync)
+	_chk_rec_audio.tooltip_text = "録画中に「音声から」のリップシンクで流したファイルの音を、録画を止めたあとに重ねます (「音も鳴らす」がオフでも入ります)"
 
 	_btn_rec = Button.new()
 	_btn_rec.text = "● 録画開始 (F12)"
@@ -135,8 +141,10 @@ func build(win, vb: VBoxContainer) -> void:
 		var cm = _win.controller.capture_manager
 		if cm.recording_active:
 			var r: Dictionary = cm.stop_recording()
-			if r.get("ok", false):
-				_win.show_snackbar("録画を保存しました: " + str(r.get("path", "")).get_file())
+			if r.get("ok", false) and str(r.get("audio_error", "")) != "":
+				_win.show_snackbar("録画を保存しましたが、リップシンクの音を入れられませんでした: " + str(r.get("audio_error", "")))
+			elif r.get("ok", false):
+				_win.show_snackbar("録画を保存しました%s: %s" % [" (リップシンクの音入り)" if r.get("lipsync_audio", false) else "", str(r.get("path", "")).get_file()])
 			else:
 				_win.show_snackbar("録画停止エラー: " + str(r.get("error", "")))
 		else:
@@ -207,6 +215,7 @@ func sync(st: Dictionary) -> void:
 	var cap: Dictionary = st.get("capture", {})
 	var rec_on := bool(cap.get("recording_active", false))
 	_btn_rec.text = "■ 録画停止 (F12)" if rec_on else "● 録画開始 (F12)"
+	_chk_rec_audio.button_pressed = bool(cap.get("record_lipsync_audio", true))
 	_btn_rec.theme_type_variation = "DangerButton" if rec_on else ""
 
 	if _win.controller != null:

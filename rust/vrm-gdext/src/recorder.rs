@@ -274,6 +274,93 @@ fn spawn_ffmpeg(
         .map_err(|e| format!("Failed to spawn ffmpeg (is ffmpeg in PATH?): {e}"))
 }
 
+/// 録画の後から重ねる音の区間。音声・動画ファイルの file_offset 秒から、録画の start〜end 秒に置く。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioSegment {
+    pub path: String,
+    pub file_offset: f64,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// 録画した映像 (音なし) に、音の区間を重ねて書き直す。映像はそのまま写す (-c:v copy)。
+/// 区間は重ならない前提で、間は無音で埋める。失敗したときは元の映像を残す。
+pub fn mux_audio_segments(video_path: &str, segments: &[AudioSegment], format: RecordFormat) -> Result<(), String> {
+    let mut segs: Vec<&AudioSegment> = segments
+        .iter()
+        .filter(|s| !s.path.trim().is_empty() && s.end - s.start >= 0.02)
+        .collect();
+    if segs.is_empty() {
+        return Ok(());
+    }
+    segs.sort_by(|a, b| a.start.total_cmp(&b.start));
+
+    let p = Path::new(video_path);
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let tmp = p.with_extension(format!("audio_tmp.{ext}"));
+    let tmp_s = tmp.to_string_lossy().to_string();
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-loglevel", "error", "-i", video_path]);
+    let mut filter = String::new();
+    let mut labels = String::new();
+    let mut cursor = 0.0f64;
+    for (i, s) in segs.iter().enumerate() {
+        let start = s.start.max(cursor);
+        let len = s.end - start;
+        if len <= 0.0 {
+            continue;
+        }
+        let gap_ms = ((start - cursor) * 1000.0).round().max(0.0) as i64;
+        cmd.args([
+            "-ss",
+            &format!("{:.3}", s.file_offset.max(0.0)),
+            "-t",
+            &format!("{:.3}", len),
+            "-i",
+            &s.path,
+        ]);
+        let k = i + 1;
+        filter.push_str(&format!(
+            "[{k}:a:0]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,apad,atrim=end={len:.3},adelay={gap_ms}|{gap_ms},asetpts=N/SR/TB[a{i}];"
+        ));
+        labels.push_str(&format!("[a{i}]"));
+        cursor = start + len;
+    }
+    let n = labels.matches("[a").count();
+    if n == 0 {
+        return Ok(());
+    }
+    filter.push_str(&format!("{labels}concat=n={n}:v=0:a=1[aout]"));
+    cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]", "-c:v", "copy"]);
+    match format {
+        RecordFormat::Mp4 => {
+            cmd.args(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]);
+        }
+        RecordFormat::WebmAlpha => {
+            cmd.args(["-c:a", "libopus", "-b:a", "160k"]);
+        }
+    }
+    cmd.arg(&tmp_s);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg を起動できません: {e}"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        let msg = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("音を入れられませんでした: {}", msg.trim()));
+    }
+    std::fs::remove_file(p).map_err(|e| format!("元の録画を置き換えられません: {e}"))?;
+    std::fs::rename(&tmp, p).map_err(|e| format!("録画の名前を戻せません: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +411,98 @@ mod tests {
         assert_eq!(cnt2, 10);
         assert!(std::fs::metadata(&webm_path).unwrap().len() > 200);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_tone_wav(path: &std::path::Path, secs: f32) {
+        let sr = 22050u32;
+        let n = (secs * sr as f32) as u32;
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + n * 2).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&sr.to_le_bytes());
+        b.extend_from_slice(&(sr * 2).to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&(n * 2).to_le_bytes());
+        for i in 0..n {
+            let v = ((i as f32 * 440.0 * std::f32::consts::TAU / sr as f32).sin() * 12000.0) as i16;
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    fn probe(path: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("ffprobe")
+            .args(["-v", "error"])
+            .args(args)
+            .arg(path)
+            .output()
+            .expect("ffprobe");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn max_volume(path: &std::path::Path, from: f64, len: f64) -> f64 {
+        let out = Command::new("ffmpeg")
+            .args(["-hide_banner", "-ss", &format!("{from}"), "-t", &format!("{len}"), "-i"])
+            .arg(path)
+            .args(["-map", "0:a", "-af", "volumedetect", "-f", "null", "-"])
+            .output()
+            .expect("ffmpeg");
+        let err = String::from_utf8_lossy(&out.stderr);
+        err.lines()
+            .find_map(|l| l.split("max_volume:").nth(1))
+            .and_then(|v| v.trim().trim_end_matches("dB").trim().parse().ok())
+            .unwrap_or(-91.0)
+    }
+
+    #[test]
+    fn muxes_audio_segments_into_recording() {
+        let dir = std::env::temp_dir().join("vrmviewer_rec_mux_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("tone.wav");
+        write_tone_wav(&wav, 3.0);
+        let w = 64u32;
+        let h = 64u32;
+        let mut frame = vec![0u8; (w * h * 4) as usize];
+        for (i, px) in frame.chunks_mut(4).enumerate() {
+            px[0] = 200;
+            px[3] = if i % 64 < 32 { 255 } else { 0 };
+        }
+        let segs = vec![
+            AudioSegment { path: wav.to_string_lossy().into(), file_offset: 0.2, start: 0.5, end: 1.0 },
+            AudioSegment { path: wav.to_string_lossy().into(), file_offset: 0.0, start: 1.2, end: 2.0 },
+        ];
+        for (name, fmt) in [("a.mp4", RecordFormat::Mp4), ("a.webm", RecordFormat::WebmAlpha)] {
+            let out = dir.join(name);
+            let mut rec = FfmpegRecorder::start_sync(out.to_str().unwrap(), w, h, 30, fmt, None).unwrap();
+            for _ in 0..60 {
+                rec.write_frame_blocking(&frame).unwrap();
+            }
+            rec.finish().unwrap();
+            mux_audio_segments(out.to_str().unwrap(), &segs, fmt).expect("mux");
+            let streams = probe(&out, &["-show_entries", "stream=codec_type", "-of", "csv=p=0"]);
+            assert!(streams.contains("video") && streams.contains("audio"), "{name}: {streams}");
+            let adur: f64 = probe(&out, &["-select_streams", "a:0", "-show_entries", "format=duration", "-of", "csv=p=0"])
+                .parse()
+                .unwrap_or(0.0);
+            assert!((adur - 2.0).abs() < 0.15, "{name}: duration {adur}");
+            if fmt == RecordFormat::WebmAlpha {
+                let tags = probe(&out, &["-select_streams", "v:0", "-show_entries", "stream_tags", "-of", "default"]);
+                assert!(tags.to_lowercase().contains("alpha_mode=1"), "alpha が残っていない: {tags}");
+            }
+            // 区間の前 (0〜0.4 秒) と間 (1.05〜1.15 秒) は無音、区間の中 (0.6〜0.9 秒) は鳴る
+            assert!(max_volume(&out, 0.0, 0.4) < -60.0, "{name}: 区間の前が無音でない");
+            assert!(max_volume(&out, 1.05, 0.1) < -60.0, "{name}: 区間の間が無音でない");
+            assert!(max_volume(&out, 0.6, 0.3) > -20.0, "{name}: 区間で鳴っていない");
+            assert!(!dir.join(format!("a.audio_tmp.{}", if fmt == RecordFormat::Mp4 { "mp4" } else { "webm" })).exists());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

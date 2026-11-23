@@ -6,7 +6,7 @@ pub mod ws_server;
 
 use godot::prelude::*;
 use osc_receiver::OscReceiverHandle;
-use recorder::{FfmpegRecorder, RecordFormat};
+use recorder::{AudioSegment, FfmpegRecorder, RecordFormat};
 use std::sync::{Arc, Mutex};
 use vrm_protocol::{QueuedRpcRequest, RpcResponse};
 use ws_server::WsServerHandle;
@@ -337,6 +337,40 @@ impl VrmBridge {
 
     /// 音声・動画ファイルから、口の動きと感情の表を作る (lipsync.rs)。
     /// 戻り値: {ok, fps, stride, duration, frames: PackedFloat32Array} / {ok: false, error}
+    /// 録画した映像に、後から音の区間を重ねる (録画中に流したリップシンクの音など)。
+    /// paths[i] の音声・動画ファイルを、times[3i] 秒の位置から、録画の times[3i+1]〜times[3i+2] 秒に置く。
+    #[func]
+    pub fn mux_recording_audio(
+        &self,
+        video_path: GString,
+        paths: PackedStringArray,
+        times: PackedFloat64Array,
+        format: GString,
+    ) -> VarDictionary {
+        let t = times.as_slice();
+        let segs: Vec<AudioSegment> = paths
+            .as_slice()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| t.len() >= i * 3 + 3)
+            .map(|(i, p)| AudioSegment {
+                path: p.to_string(),
+                file_offset: t[i * 3],
+                start: t[i * 3 + 1],
+                end: t[i * 3 + 2],
+            })
+            .collect();
+        let mut dict = VarDictionary::new();
+        match recorder::mux_audio_segments(&video_path.to_string(), &segs, RecordFormat::from_str(&format.to_string())) {
+            Ok(()) => dict.set("ok", true),
+            Err(e) => {
+                dict.set("ok", false);
+                dict.set("error", &GString::from(&e));
+            }
+        }
+        dict
+    }
+
     #[func]
     pub fn analyze_lipsync(&self, path: GString) -> VarDictionary {
         Self::lipsync_dict(&path.to_string(), false)

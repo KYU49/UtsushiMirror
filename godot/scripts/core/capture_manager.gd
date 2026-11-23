@@ -24,7 +24,17 @@ var recording_path: String = ""
 var screenshots_dir: String = "screenshots"
 var recordings_dir: String = "recordings"
 
-var _record_accum: float = 0.0
+## 録画に、録画中に流したリップシンクの音を入れる (録画を止めた後に重ねる)
+var record_lipsync_audio: bool = true
+## リップシンク (lip_sync.gd)。app_controller が渡す
+var lip_sync = null
+
+var _record_elapsed: float = 0.0
+var _frames_pushed: int = 0
+var _audio_segs: Array = []  # {path, offset, start, end} (秒。start / end は録画の中の時間)
+var _seg_open := {}
+var _seg_session := -1
+var _rec_lipsync_audio := true
 var _sequencer_busy: bool = false
 var _screenshot_busy: bool = false
 
@@ -41,14 +51,14 @@ func setup(p_bridge: Node, p_out_vp: SubViewport, p_bg_mgr, p_cam_rig, p_light_r
 func process_frame(delta: float) -> void:
 	if _sequencer_busy or output_viewport == null:
 		return
-	var need_record := false
+	var need_record := 0
 	if recording_active and bridge != null:
-		var frame_dt := 1.0 / maxf(float(recording_fps), 1.0)
-		_record_accum += delta
-		if _record_accum >= frame_dt:
-			_record_accum = fmod(_record_accum, frame_dt)
-			need_record = true
-	if not spout_enabled and not vcam_enabled and not need_record:
+		# 録画の時間を実際の時間に合わせる (遅れたら同じ絵を足して追いつく。音とずれないように)
+		_record_elapsed += delta
+		var due := int(_record_elapsed * float(recording_fps)) + 1 - _frames_pushed
+		need_record = clampi(due, 0, 4)
+		_track_lipsync()
+	if not spout_enabled and not vcam_enabled and need_record == 0:
 		return
 
 	var tex := output_viewport.get_texture()
@@ -68,8 +78,36 @@ func process_frame(delta: float) -> void:
 		bridge.send_spout_frame(w, h, data)
 	if vcam_enabled and bridge != null:
 		bridge.send_vcam_frame(w, h, data)
-	if need_record and bridge != null:
-		bridge.push_recording_frame(data, false)
+	if need_record > 0 and bridge != null:
+		for i in range(need_record):
+			if not bridge.push_recording_frame(data, false):
+				break
+			_frames_pushed += 1
+
+
+## 録画の中の今の時間 (秒)
+func _video_time() -> float:
+	return float(_frames_pushed) / maxf(float(recording_fps), 1.0)
+
+
+## リップシンクの区間を覚える (始まり・切り替わり・終わり)
+func _track_lipsync() -> void:
+	if lip_sync == null or not _rec_lipsync_audio:
+		return
+	var on: bool = lip_sync.active
+	if not _seg_open.is_empty() and (not on or lip_sync.session != _seg_session):
+		_close_seg()
+	if on and _seg_open.is_empty():
+		_seg_session = lip_sync.session
+		_seg_open = {"path": str(lip_sync.path), "offset": float(lip_sync._t), "start": _video_time()}
+
+
+func _close_seg() -> void:
+	if _seg_open.is_empty():
+		return
+	_seg_open["end"] = _video_time()
+	_audio_segs.append(_seg_open)
+	_seg_open = {}
 
 
 func capture_screenshot(params: Dictionary) -> Dictionary:
@@ -162,7 +200,11 @@ func start_recording(params: Dictionary) -> Dictionary:
 	if res.get("ok", false):
 		recording_active = true
 		recording_path = abs_out
-		_record_accum = 0.0
+		_record_elapsed = 0.0
+		_frames_pushed = 0
+		_audio_segs.clear()
+		_seg_open = {}
+		_rec_lipsync_audio = bool(params.get("lipsync_audio", record_lipsync_audio))
 		_refresh_viewport_update_mode()
 		capture_state_changed.emit()
 	return res
@@ -171,11 +213,37 @@ func start_recording(params: Dictionary) -> Dictionary:
 func stop_recording() -> Dictionary:
 	if bridge == null or not recording_active:
 		return {"ok": false, "error": "Not currently recording"}
+	_close_seg()
 	recording_active = false
 	var res: Dictionary = bridge.stop_recording()
+	if res.get("ok", false):
+		res["path"] = str(res.get("output_path", recording_path))
+		if not _audio_segs.is_empty():
+			var mx := _mux_lipsync_audio(str(res["path"]))
+			res["lipsync_audio"] = mx.get("ok", false)
+			if not mx.get("ok", false):
+				res["audio_error"] = str(mx.get("error", ""))
+	_audio_segs.clear()
 	_refresh_viewport_update_mode()
 	capture_state_changed.emit()
 	return res
+
+
+## 録画中に流したリップシンクの音を、録画したファイルに重ねる
+func _mux_lipsync_audio(video: String) -> Dictionary:
+	var paths := PackedStringArray()
+	var times := PackedFloat64Array()
+	var total := _video_time()
+	for s in _audio_segs:
+		var st := float(s["start"])
+		var en := minf(float(s["end"]), total)
+		if en - st < 0.02:
+			continue
+		paths.append(str(s["path"]))
+		times.append_array([float(s["offset"]), st, en])
+	if paths.is_empty():
+		return {"ok": true}
+	return bridge.mux_recording_audio(video, paths, times, recording_format)
 
 
 func set_spout(params: Dictionary) -> Dictionary:
@@ -365,6 +433,7 @@ func to_dict() -> Dictionary:
 		"recording_path": recording_path,
 		"screenshots_dir": screenshots_dir,
 		"recordings_dir": recordings_dir,
+		"record_lipsync_audio": record_lipsync_audio,
 	}
 
 

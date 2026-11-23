@@ -13,6 +13,9 @@ var _tone_max := 0.0
 var _silence_max := 0.0
 var _locked_seen := false
 var _anim_name := ""
+var _rec_path := ""
+var _rec_t0 := 0
+var _ls_video_start := 0.0
 
 
 func _check(name: String, cond: bool) -> void:
@@ -53,6 +56,13 @@ func _make_wav(path: String) -> void:
 	w.stereo = false
 	w.data = data
 	w.save_to_wav(path)
+
+
+func _max_volume(log: String) -> float:
+	var i := log.find("max_volume:")
+	if i < 0:
+		return -91.0
+	return float(log.substr(i + 11, 12).strip_edges().replace("dB", ""))
 
 
 func _mouth_sum() -> float:
@@ -176,7 +186,38 @@ func _process(_d: float) -> bool:
 		_m.lip_sync.stop()
 		_check("止めると音も止まる", not _m.lip_sync.is_playing_audio())
 		_m.lip_sync.play_audio = false
+	# 録画中に流したリップシンクの音が、止めた後の動画に入る
 	if _f == 330:
+		_check("録画に音を入れるのは既定でオン", _m.capture_manager.record_lipsync_audio)
+		_rec_path = _tmp.path_join("rec.mp4")
+		var rr: Dictionary = _m.capture_manager.start_recording({"output_path": _rec_path, "format": "mp4", "fps": 30, "width": 320, "height": 240})
+		_check("録画を始められる", rr.get("ok", false))
+		_rec_t0 = Time.get_ticks_msec()
+	if _f == 350:
+		_ls_video_start = _m.capture_manager._video_time()
+		_check("録画中にリップシンクを始められる", _m.start_lipsync({"path": _wav}).get("ok", false))
+	if _f > 350 and _f < 600 and not _m.lip_sync.active and _rec_t0 > 0:
+		var wall := (Time.get_ticks_msec() - _rec_t0) / 1000.0
+		var sr: Dictionary = _m.capture_manager.stop_recording()
+		_rec_t0 = 0
+		print("rec ", sr, " wall=", wall, " video=", _m.capture_manager._video_time(), " ls_start=", _ls_video_start)
+		_check("録画を止めると、リップシンクの音が入る", sr.get("ok", false) and sr.get("lipsync_audio", false))
+		_check("録画の長さが実際の時間に合う", absf(_m.capture_manager._video_time() - wall) < 0.3)
+		var out := []
+		OS.execute("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type:format=duration", "-of", "csv=p=0", _rec_path], out)
+		print("probe ", out)
+		_check("録画したファイルに音の流れがある", str(out).contains("audio") and str(out).contains("video"))
+		# 音は、リップシンクを始めた位置 (前は無音) から鳴る
+		var o2 := []
+		OS.execute("ffmpeg", ["-hide_banner", "-t", str(maxf(_ls_video_start - 0.1, 0.05)), "-i", _rec_path, "-map", "0:a", "-af", "volumedetect", "-f", "null", "-"], o2, true)
+		var o3 := []
+		OS.execute("ffmpeg", ["-hide_banner", "-ss", str(_ls_video_start + 0.15), "-t", "0.3", "-i", _rec_path, "-map", "0:a", "-af", "volumedetect", "-f", "null", "-"], o3, true)
+		var before := _max_volume(str(o2))
+		var during := _max_volume(str(o3))
+		print("before %.1f dB / during %.1f dB" % [before, during])
+		_check("リップシンクの前は無音で、始めた位置から音が鳴る", before < -60.0 and during > -30.0)
+		_f = 600
+	if _f == 610:
 		print("TEST_LIPSYNC_RESULT=", "PASS" if _ok else "FAIL")
 		return true
 	return false

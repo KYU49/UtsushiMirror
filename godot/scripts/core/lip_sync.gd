@@ -14,6 +14,8 @@ var active := false
 var path := ""
 ## 最後に始めたファイル (止まっても残る。「もう一度」で使う)
 var last_path := ""
+## 始めるたびに 1 つ増える (録画が、区間の切り替わりを見分けるのに使う)
+var session := 0
 const DEFAULT_INTENSITY := 0.5
 var intensity := DEFAULT_INTENSITY
 var emotion := true
@@ -71,6 +73,7 @@ func start(params: Dictionary) -> Dictionary:
 	path = p
 	last_path = p
 	active = true
+	session += 1
 	if play_audio and res.has("pcm"):
 		_play_pcm(res, _t)
 	return {"ok": true, "path": p, "duration_sec": snappedf(_dur, 0.01), "start_sec": snappedf(_t, 0.01), "play_audio": is_playing_audio()}

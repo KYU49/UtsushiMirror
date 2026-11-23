@@ -133,6 +133,7 @@ func _ready() -> void:
 	)
 	hotkey_manager.setup(bridge)
 	capture_manager.setup(bridge, output_viewport, bg_manager, camera_rig, lighting_rig)
+	capture_manager.lip_sync = lip_sync
 
 	hotkey_manager.hotkey_triggered.connect(_on_hotkey_action)
 	camera_rig.camera_changed.connect(_emit_state_changed)
@@ -1107,6 +1108,7 @@ func build_config_dict() -> Dictionary:
 	out_dict["vcam_enabled"] = capture_manager.vcam_enabled
 	out_dict["screenshots_dir"] = capture_manager.screenshots_dir
 	out_dict["recordings_dir"] = capture_manager.recordings_dir
+	out_dict["record_lipsync_audio"] = capture_manager.record_lipsync_audio
 	return {
 		"version": 1,
 		"last_vrm_path": current_vrm.model_path if current_vrm != null else "",
@@ -1211,6 +1213,7 @@ func _apply_config_dict(cfg: Dictionary) -> void:
 			capture_manager.screenshots_dir = str(out_d["screenshots_dir"])
 		if out_d.has("recordings_dir"):
 			capture_manager.recordings_dir = str(out_d["recordings_dir"])
+		capture_manager.record_lipsync_audio = bool(out_d.get("record_lipsync_audio", capture_manager.record_lipsync_audio))
 	if cfg.has("idle") and typeof(cfg["idle"]) == TYPE_DICTIONARY:
 		procedural_idle.apply_params(cfg["idle"])
 	if cfg.has("hotkeys") and typeof(cfg["hotkeys"]) == TYPE_DICTIONARY:
