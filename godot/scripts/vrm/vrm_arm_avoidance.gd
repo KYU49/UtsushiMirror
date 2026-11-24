@@ -1,8 +1,8 @@
 class_name VrmArmAvoidance
 extends RefCounted
 
-## トラッキング中の腕・手が体幹・胸・頭(+横髪)へめり込むのを 2-Bone IK で回避し、
-## 手のひら・前腕の SpringBone 外部コライダーを生成する。
+## トラッキング中の腕・手・指先が体幹・胸・頭(+横髪)へめり込むのを 2-Bone IK で回避し、
+## 手のひら〜指先・前腕の SpringBone 外部コライダーを生成する。
 
 const VrmSpringBoneScript := preload("res://scripts/vrm/vrm_springbone.gd")
 
@@ -43,27 +43,32 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 	var torso_left: Vector3 = (q_chest * Vector3(1.0, 0.0, 0.0)).normalized()
 	var torso_up: Vector3 = (q_chest * Vector3(0.0, 1.0, 0.0)).normalized()
 
+	var torso_cap_p0: Vector3 = hips_pos + torso_up * (sh_w * 0.12)
+	var torso_cap_p1: Vector3 = up_chest_pos + torso_up * (sh_w * 0.08)
+	var torso_cap_r: float = clampf(sh_w * 0.38, 0.09, 0.19)
+	var bust_base: Vector3 = chest_pos.lerp(up_chest_pos, 0.65)
+
 	var obstacles: Array = []
-	# 1) 体幹カプセル + 胸前方スフィア + 頭部/横髪スフィア (肩幅スケール基準)
+	# 1) 体幹カプセル + 胸/バスト前方スフィア + 頭部(+頬・横髪)スフィア
 	obstacles.append({
 		"type": "capsule",
-		"p0": hips_pos + torso_up * (sh_w * 0.15),
-		"p1": up_chest_pos,
-		"r": clampf(sh_w * 0.36, 0.08, 0.18),
+		"p0": torso_cap_p0,
+		"p1": torso_cap_p1,
+		"r": torso_cap_r,
 		"kind": "torso",
 	})
 	obstacles.append({
 		"type": "sphere",
-		"p0": chest_pos + torso_fwd * (sh_w * 0.16) - torso_up * (sh_w * 0.05),
+		"p0": bust_base + torso_fwd * (sh_w * 0.22),
 		"p1": Vector3.ZERO,
-		"r": clampf(sh_w * 0.34, 0.08, 0.17),
+		"r": clampf(sh_w * 0.42, 0.10, 0.20),
 		"kind": "torso",
 	})
 	obstacles.append({
 		"type": "sphere",
-		"p0": head_pos + Vector3(0.0, sh_w * 0.20, 0.0),
+		"p0": head_pos + torso_up * (sh_w * 0.14),
 		"p1": Vector3.ZERO,
-		"r": clampf(sh_w * 0.45, 0.11, 0.22),
+		"r": clampf(sh_w * 0.50, 0.12, 0.25),
 		"kind": "head",
 	})
 
@@ -118,15 +123,35 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 		if lu < 0.05 or ll < 0.05:
 			continue
 
-		var push_wr: Vector3 = _resolve_obstacles(wr_pos, hand_pad, obstacles, torso_fwd, torso_left, sign_v)
+		# 手首に加えて指先 (掌先)・前腕中間点も判定し、指先が胸/髪を突き抜けるのを防ぐ
+		var palm_tip: Vector3
+		var mid_dist: String = side + "MiddleDistal"
+		var mid_prox: String = side + "MiddleProximal"
+		if humanoid.has_bone(mid_dist):
+			palm_tip = _bone_local(humanoid, root_inv, mid_dist)
+		elif humanoid.has_bone(mid_prox):
+			var mp_pos: Vector3 = _bone_local(humanoid, root_inv, mid_prox)
+			palm_tip = wr_pos + (mp_pos - wr_pos) * 1.9
+		else:
+			var fa_dir := (wr_pos - el_pos).normalized() if wr_pos.distance_to(el_pos) > 1e-4 else torso_fwd
+			palm_tip = wr_pos + fa_dir * (sh_w * 0.34)
+
+		var p_cur: Vector3 = _resolve_obstacles(wr_pos, hand_pad, obstacles, torso_fwd, torso_left, sign_v)
 		var mid_fa: Vector3 = el_pos.lerp(wr_pos, 0.55)
-		var push_fa: Vector3 = _resolve_obstacles(mid_fa, hand_pad * 0.85, obstacles, torso_fwd, torso_left, sign_v)
-		var raw_push: Vector3 = push_wr if push_wr.length_squared() >= push_fa.length_squared() else (push_fa * 1.15)
+		p_cur += _resolve_obstacles(mid_fa + p_cur * 0.55, hand_pad * 0.85, obstacles, torso_fwd, torso_left, sign_v) * 1.15
+		var tip_res: Vector3 = _resolve_obstacles(palm_tip + p_cur, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
+		var raw_push: Vector3 = p_cur + tip_res * 0.5
 
 		var prev_push: Vector3 = _smooth_push.get(side, Vector3.ZERO)
 		var push: Vector3 = prev_push.lerp(raw_push, alpha)
 		_smooth_push[side] = push
-		if push.length_squared() < 1e-8:
+
+		var cur_tip_vec: Vector3 = palm_tip - wr_pos
+		var probe_wr: Vector3 = wr_pos + push
+		var pre_tip_clear := Vector3.ZERO
+		if cur_tip_vec.length_squared() > 1e-5:
+			pre_tip_clear = _resolve_obstacles(probe_wr + cur_tip_vec, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
+		if push.length_squared() < 1e-8 and pre_tip_clear.length_squared() < 1e-8:
 			continue
 
 		var q_parent: Quaternion = q_chest
@@ -139,45 +164,72 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 		var has_hand_comp: bool = composed_bones.has(hd_name)
 		var q_hd_world: Quaternion = (q_lo_world * (composed_bones.get(hd_name, Quaternion.IDENTITY) as Quaternion)).normalized()
 
-		var max_reach: float = (lu + ll) * 0.995
-		var min_reach: float = maxf(0.05, absf(lu - ll) + 0.01)
-		var rel_target: Vector3 = (wr_pos + push) - sh_pos
-		var dist: float = clampf(rel_target.length(), min_reach, max_reach)
-		var cur_u: Vector3 = (el_pos - sh_pos).normalized()
-		var cur_l: Vector3 = (wr_pos - el_pos).normalized()
-		var n: Vector3 = rel_target.normalized() if rel_target.length_squared() > 1e-8 else cur_u
+		var new_up_world: Quaternion = q_up_world
+		var new_lo_world: Quaternion = q_lo_world
+		var new_wr: Vector3 = wr_pos
+		if push.length_squared() >= 1e-8:
+			var max_reach: float = (lu + ll) * 0.995
+			var min_reach: float = maxf(0.05, absf(lu - ll) + 0.01)
+			var rel_target: Vector3 = (wr_pos + push) - sh_pos
+			var dist: float = clampf(rel_target.length(), min_reach, max_reach)
+			var cur_u: Vector3 = (el_pos - sh_pos).normalized()
+			var cur_l: Vector3 = (wr_pos - el_pos).normalized()
+			var n: Vector3 = rel_target.normalized() if rel_target.length_squared() > 1e-8 else cur_u
 
-		# 元の肘の向き (上腕方向) を極ベクトルにして平面の不連続反転を防ぐ
-		var cur_arm: Vector3 = el_pos - sh_pos
-		var b: Vector3 = cur_arm - n * cur_arm.dot(n)
-		if b.length_squared() < 1e-6:
-			var fb := Vector3(sign_v * 0.3, -1.0, -0.3)
-			b = fb - n * fb.dot(n)
+			# 元の肘の向き (上腕方向) を極ベクトルにして平面の不連続反転を防ぐ
+			var cur_arm: Vector3 = el_pos - sh_pos
+			var b: Vector3 = cur_arm - n * cur_arm.dot(n)
 			if b.length_squared() < 1e-6:
-				b = Vector3(0.0, 0.0, 1.0) - n * n.z
-		b = b.normalized()
+				var fb := Vector3(sign_v * 0.3, -1.0, -0.3)
+				b = fb - n * fb.dot(n)
+				if b.length_squared() < 1e-6:
+					b = Vector3(0.0, 0.0, 1.0) - n * n.z
+			b = b.normalized()
 
-		var cos_a: float = clampf((lu * lu + dist * dist - ll * ll) / (2.0 * lu * dist), -1.0, 1.0)
-		var sin_a: float = sqrt(maxf(0.0, 1.0 - cos_a * cos_a))
-		var new_el: Vector3 = sh_pos + n * (cos_a * lu) + b * (sin_a * lu)
-		var new_wr: Vector3 = sh_pos + n * dist
+			var cos_a: float = clampf((lu * lu + dist * dist - ll * ll) / (2.0 * lu * dist), -1.0, 1.0)
+			var sin_a: float = sqrt(maxf(0.0, 1.0 - cos_a * cos_a))
+			var new_el: Vector3 = sh_pos + n * (cos_a * lu) + b * (sin_a * lu)
 
-		var tgt_u: Vector3 = (new_el - sh_pos).normalized()
-		var tgt_l: Vector3 = (new_wr - new_el).normalized()
-		var dq_u: Quaternion = _shortest_arc(cur_u, tgt_u)
-		var dq_l: Quaternion = _shortest_arc(cur_l, tgt_l)
+			# 肘自体が胴体にめり込む場合はポールベクトルを外側へ少し逃がす
+			var el_closest: Vector3 = _closest_pt_seg(new_el, torso_cap_p0, torso_cap_p1)
+			var el_safe: float = torso_cap_r + hand_pad * 0.5
+			if new_el.distance_to(el_closest) < el_safe:
+				var pen_ratio := clampf((el_safe - new_el.distance_to(el_closest)) / el_safe, 0.0, 1.0)
+				var out_nudge := (torso_left * sign_v - torso_fwd * 0.25).normalized()
+				var b2 := (b + out_nudge * (pen_ratio * 0.9))
+				b2 = b2 - n * b2.dot(n)
+				if b2.length_squared() > 1e-6:
+					b = b2.normalized()
+					new_el = sh_pos + n * (cos_a * lu) + b * (sin_a * lu)
 
-		var new_up_world: Quaternion = (dq_u * q_up_world).normalized()
-		var new_lo_world: Quaternion = (dq_l * q_lo_world).normalized()
-		var new_up_local: Quaternion = (q_parent.inverse() * new_up_world).normalized()
-		var new_lo_local: Quaternion = (new_up_world.inverse() * new_lo_world).normalized()
+			new_wr = sh_pos + n * dist
+			var tgt_u: Vector3 = (new_el - sh_pos).normalized()
+			var tgt_l: Vector3 = (new_wr - new_el).normalized()
+			var dq_u: Quaternion = _shortest_arc(cur_u, tgt_u)
+			var dq_l: Quaternion = _shortest_arc(cur_l, tgt_l)
 
-		composed_bones[up_name] = new_up_local
-		composed_bones[lo_name] = new_lo_local
-		humanoid.set_normalized_bone_rotation(up_name, new_up_local)
-		humanoid.set_normalized_bone_rotation(lo_name, new_lo_local)
+			new_up_world = (dq_u * q_up_world).normalized()
+			new_lo_world = (dq_l * q_lo_world).normalized()
+			var new_up_local: Quaternion = (q_parent.inverse() * new_up_world).normalized()
+			var new_lo_local: Quaternion = (new_up_world.inverse() * new_lo_world).normalized()
+
+			composed_bones[up_name] = new_up_local
+			composed_bones[lo_name] = new_lo_local
+			humanoid.set_normalized_bone_rotation(up_name, new_up_local)
+			humanoid.set_normalized_bone_rotation(lo_name, new_lo_local)
+
+		# 指先が依然として体幹/胸/頭に刺さる場合は、手首を外向き・前向きに沿わせて逃がす
+		var final_hd_world: Quaternion = q_hd_world
+		if cur_tip_vec.length_squared() > 1e-5:
+			var tip_clear: Vector3 = _resolve_obstacles(new_wr + cur_tip_vec, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
+			if tip_clear.length_squared() > 1e-6:
+				var desired_tip_vec: Vector3 = cur_tip_vec + tip_clear
+				if desired_tip_vec.length_squared() > 1e-6:
+					var dq_h: Quaternion = _shortest_arc(cur_tip_vec, desired_tip_vec)
+					final_hd_world = (dq_h * q_hd_world).normalized()
+					has_hand_comp = true
 		if has_hand_comp:
-			var new_hd_local: Quaternion = (new_lo_world.inverse() * q_hd_world).normalized()
+			var new_hd_local: Quaternion = (new_lo_world.inverse() * final_hd_world).normalized()
 			composed_bones[hd_name] = new_hd_local
 			humanoid.set_normalized_bone_rotation(hd_name, new_hd_local)
 
@@ -190,23 +242,33 @@ func build_hand_spring_colliders(humanoid) -> Array:
 		var lw: Vector3 = humanoid.get_bone_world_transform("leftUpperArm").origin
 		var rw: Vector3 = humanoid.get_bone_world_transform("rightUpperArm").origin
 		sh_w = clampf(lw.distance_to(rw), 0.18, 0.55)
-	var palm_r: float = clampf(sh_w * 0.16, 0.04, 0.08)
-	var fore_r: float = clampf(sh_w * 0.14, 0.035, 0.065)
+	var hand_r: float = clampf(sh_w * 0.18, 0.05, 0.085)
+	var fore_r: float = clampf(sh_w * 0.15, 0.04, 0.07)
 
 	var out: Array = []
 	for side in ["left", "right"]:
 		var hd_name: String = side + "Hand"
 		var lo_name: String = side + "LowerArm"
-		var mid_name: String = side + "MiddleProximal"
+		var mid_dist: String = side + "MiddleDistal"
+		var mid_prox: String = side + "MiddleProximal"
 		if humanoid.has_bone(hd_name):
-			var palm_pos: Vector3 = humanoid.get_bone_world_transform(hd_name).origin
-			if humanoid.has_bone(mid_name):
-				palm_pos = palm_pos.lerp(humanoid.get_bone_world_transform(mid_name).origin, 0.55)
-			var sph = VrmSpringBoneScript.ColliderDef.new()
-			sph.shape = "sphere"
-			sph.w_p0 = palm_pos
-			sph.radius = palm_r
-			out.append(sph)
+			var hand_pos: Vector3 = humanoid.get_bone_world_transform(hd_name).origin
+			var tip_pos := hand_pos
+			if humanoid.has_bone(mid_dist):
+				tip_pos = humanoid.get_bone_world_transform(mid_dist).origin
+			elif humanoid.has_bone(mid_prox):
+				var mp_pos: Vector3 = humanoid.get_bone_world_transform(mid_prox).origin
+				tip_pos = hand_pos + (mp_pos - hand_pos) * 1.9
+			var col_h = VrmSpringBoneScript.ColliderDef.new()
+			if tip_pos.distance_to(hand_pos) > 0.01:
+				col_h.shape = "capsule"
+				col_h.w_p0 = hand_pos
+				col_h.w_p1 = tip_pos
+			else:
+				col_h.shape = "sphere"
+				col_h.w_p0 = hand_pos
+			col_h.radius = hand_r
+			out.append(col_h)
 		if humanoid.has_bone(lo_name) and humanoid.has_bone(hd_name):
 			var cap = VrmSpringBoneScript.ColliderDef.new()
 			cap.shape = "capsule"
@@ -228,9 +290,9 @@ static func _resolve_obstacles(pt: Vector3, pad: float, obstacles: Array, torso_
 			var c: Vector3 = obs["p0"] if obs["type"] == "sphere" else _closest_pt_seg(p, obs["p0"], obs["p1"])
 			var r_safe: float = float(obs["r"]) + pad
 			var d_vec := p - c
-			var dist := d_vec.length()
-			if dist < r_safe:
-				var pen := r_safe - dist
+			var dist_sq := d_vec.length_squared()
+			if dist_sq < r_safe * r_safe:
+				var dist := sqrt(dist_sq)
 				var push_dir := (d_vec / dist) if dist > 1e-5 else torso_fwd
 				var fwd_dot := push_dir.dot(torso_fwd)
 				if obs["kind"] == "torso":
@@ -242,7 +304,12 @@ static func _resolve_obstacles(pt: Vector3, pad: float, obstacles: Array, torso_
 						push_dir += torso_fwd * (0.30 - fwd_dot)
 					push_dir += torso_left * (sign_v * 0.30)
 				if push_dir.length_squared() > 1e-8:
-					p += push_dir.normalized() * pen
+					var u := push_dir.normalized()
+					# バイアス方向へ安全球表面まで厳密に押し出す (めり込み残りを防ぐ)
+					var b_q := d_vec.dot(u)
+					var c_q := dist_sq - r_safe * r_safe
+					var step_t := -b_q + sqrt(maxf(0.0, b_q * b_q - c_q))
+					p += u * step_t
 	return p - pt
 
 

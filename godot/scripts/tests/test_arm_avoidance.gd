@@ -55,6 +55,8 @@ func _run_tests() -> bool:
 	var chest_pos_off: Vector3 = vrm.humanoid.get_bone_world_transform("chest").origin
 	var hand_pos_off: Vector3 = vrm.humanoid.get_bone_world_transform("leftHand").origin
 	var dist_off: float = hand_pos_off.distance_to(chest_pos_off)
+	var tip_bone := "leftMiddleDistal" if vrm.humanoid.has_bone("leftMiddleDistal") else "leftHand"
+	var tip_dist_off: float = vrm.humanoid.get_bone_world_transform(tip_bone).origin.distance_to(chest_pos_off)
 
 	# 2) 回避オン: 胸・体幹から前方/外側へ押し出される
 	vrm.arm_avoidance.reset()
@@ -64,7 +66,9 @@ func _run_tests() -> bool:
 	var chest_pos_on: Vector3 = vrm.humanoid.get_bone_world_transform("chest").origin
 	var hand_pos_on: Vector3 = vrm.humanoid.get_bone_world_transform("leftHand").origin
 	var dist_on: float = hand_pos_on.distance_to(chest_pos_on)
+	var tip_dist_on: float = vrm.humanoid.get_bone_world_transform(tip_bone).origin.distance_to(chest_pos_on)
 	ok = _check("腕の胸めり込み回避で手首が胸から押し出される (off=%.3f -> on=%.3f)" % [dist_off, dist_on], dist_on > dist_off + 0.04) and ok
+	ok = _check("指先 (%s) も胸から押し出される (off=%.3f -> on=%.3f)" % [tip_bone, tip_dist_off, tip_dist_on], tip_dist_on > tip_dist_off + 0.04) and ok
 	ok = _check("回避後も前方 (+Z) 側に保たれる", hand_pos_on.z >= chest_pos_on.z + 0.05) and ok
 
 	# 3) 頭部・横髪への腕差し込みでも発散・NaNにならず押し出される
@@ -98,7 +102,12 @@ func _run_tests() -> bool:
 	ok = _check("SpringBone 用の手・前腕コライダー 4 つが生成される", cols_ok and vrm.spring_bone.extra_colliders.size() >= 4) and ok
 
 	if not vrm.spring_bone.springs.is_empty() and not vrm.spring_bone.springs[0].joints.is_empty():
-		var js = vrm.spring_bone.springs[0].joints[0]
+		var target_chain = vrm.spring_bone.springs[0]
+		for sc in vrm.spring_bone.springs:
+			if str(sc.name).to_lower().contains("hair"):
+				target_chain = sc
+				break
+		var js = target_chain.joints[0]
 		var tail_test := Vector3(1.0, 1.0, 1.0)
 		var sphere_col = VrmSpringBoneScript.ColliderDef.new()
 		sphere_col.shape = "sphere"
@@ -106,6 +115,23 @@ func _run_tests() -> bool:
 		sphere_col.radius = 0.08
 		var pushed: Vector3 = vrm.spring_bone._resolve_collider(sphere_col, tail_test, maxf(0.01, js.hit_radius))
 		ok = _check("手コライダー球が SpringBone ジョイントを押せる", pushed.distance_to(sphere_col.w_p0) >= 0.08) and ok
+
+		# 実モデルの髪 SpringBone チェーンに外部コライダーを当てて実際に揺れ動くかを検証
+		vrm.step(0.016)
+		var center_xf: Transform3D = vrm.spring_bone._get_center_transform(target_chain)
+		var tail_world_before: Vector3 = center_xf * js.current_tail
+		var tail_before_local: Vector3 = js.current_tail
+		var fake_hand = VrmSpringBoneScript.ColliderDef.new()
+		fake_hand.shape = "sphere"
+		fake_hand.w_p0 = tail_world_before + Vector3(0.0, 0.0, 0.03)
+		fake_hand.radius = 0.09
+		vrm.hand_spring_collide_enabled = false
+		vrm.spring_bone.extra_colliders = [fake_hand]
+		vrm.spring_bone.update(0.016)
+		var deflect: float = (js.current_tail - tail_before_local).length()
+		vrm.spring_bone.extra_colliders.clear()
+		vrm.hand_spring_collide_enabled = true
+		ok = _check("実モデルの髪 SpringBone (%s) が手コライダーで実際に押し出される (変位=%.4f)" % [target_chain.name, deflect], deflect > 0.005) and ok
 
 	# 5) VMC トラッキングが空のときは干渉せず extra_colliders も空になる
 	vrm.vmc_bone_overrides.clear()
