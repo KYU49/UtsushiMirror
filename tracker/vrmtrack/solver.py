@@ -51,6 +51,7 @@ FINGER_BONES = {
     "Little": ("LittleProximal", "LittleIntermediate", "LittleDistal"),
 }
 ARM_BONES = ("Shoulder", "UpperArm", "LowerArm")
+LEG_BONES = ("UpperLeg", "LowerLeg")
 HAND_BONES = ("Hand",) + tuple(b for names in FINGER_BONES.values() for b in names)
 SHOULDER_WIDTH_M = 0.38  # 腰の移動量を画像から求めるときの目安
 
@@ -277,6 +278,8 @@ class Solver:
         self._dt = 1.0 / 30.0
         self._t_now = 0.0
         self._arm_ok: dict[str, bool] = {}       # 前のフレームで姿勢推定の腕を使えたか (しきい値のヒステリシス)
+        self._knee_ok: dict[str, bool] = {}      # 前のフレームで膝を使えたか (しきい値のヒステリシス)
+        self._leg_ok: dict[str, bool] = {}       # 前のフレームで足首まで使えたか (しきい値のヒステリシス)
         self._pose_arm: dict[str, tuple] = {}    # 側 → (上腕, 前腕, 時刻): 最後に信用できた姿勢推定の腕
         self._est_w: dict[str, float] = {}       # 側 → 手から推定した腕を混ぜる割合 (0 = 姿勢推定, 1 = 推定)
 
@@ -453,12 +456,33 @@ class Solver:
         if cfg.use_legs and hips_ok:
             down = np.array([0.0, -1.0, 0.0])
             for side, h_i, k_i, a_i in (("left", lh, lk, la), ("right", rh, rk, ra)):
-                if min(self._vis(w, k_i), self._vis(w, a_i)) < cfg.min_visibility:
+                thr_k = cfg.min_visibility * (0.55 if self._knee_ok.get(side) else 0.8)
+                thr_a = cfg.min_visibility * (0.55 if self._leg_ok.get(side) else 0.8)
+                knee_ok = self._vis(w, k_i) >= thr_k
+                if knee_ok and self._img is not None and not self._in_frame(self._img[k_i], 0.02):
+                    knee_ok = False
+                ank_ok = knee_ok and self._vis(w, a_i) >= thr_a
+                if ank_ok and self._img is not None and not self._in_frame(self._img[a_i], 0.02):
+                    ank_ok = False
+                self._knee_ok[side] = knee_ok
+                self._leg_ok[side] = ank_ok
+                if not knee_ok:
                     continue
                 ul = q_from_to(down, p[k_i] - p[h_i])
                 res.bones[f"{side}UpperLeg"] = ul
+                if not ank_ok:
+                    continue
                 ll_world = q_mul(q_from_to(q_rot(ul, down), p[a_i] - p[k_i]), ul)
-                res.bones[f"{side}LowerLeg"] = q_mul(q_inv(ul), ll_world)
+                ll = q_mul(q_inv(ul), ll_world)
+                # 膝の過伸展 (+Z 方向への逆関節曲げ) を防ぐ
+                shin = q_rot(ll, down)
+                if shin[2] > 0.02:
+                    clamped = np.array([shin[0], shin[1], 0.0], dtype=float)
+                    ll = q_from_to(down, clamped) if float(np.linalg.norm(clamped)) > 1e-6 else IDENT.copy()
+                res.bones[f"{side}LowerLeg"] = ll
+        else:
+            self._knee_ok.clear()
+            self._leg_ok.clear()
         return chest_world
 
     def _solve_shoulders(self, res: SolveResult) -> None:
@@ -819,13 +843,15 @@ class Solver:
 
     # ------------------------------------------------------------------ 見失ったとき
     def _handle_lost(self, res: SolveResult, t: float, dt: float) -> set:
-        """腕・手が今フレームで取れなかったら、少し待ってから自然な姿勢へ戻す。"""
+        """腕・手・脚が今フレームで取れなかったら、少し待ってから自然な姿勢へ戻す。"""
         cfg = self.cfg
         groups = []
         if cfg.use_body:
             groups += [(f"{s}Arm", [f"{s}{b}" for b in ARM_BONES]) for s in ("left", "right")]
         if cfg.use_hands:
             groups += [(f"{s}Hand", [f"{s}{b}" for b in HAND_BONES]) for s in ("left", "right")]
+        if cfg.use_legs:
+            groups += [(f"{s}{b}", [f"{s}{b}"]) for s in ("left", "right") for b in LEG_BONES]
         held = set()
         for gname, bones in groups:
             # 肩は腕が見えていなくても毎フレーム出すので、見えているかの判定には使わない
@@ -837,7 +863,8 @@ class Solver:
             lost_for = t - self._seen[gname]
             k = 0.0
             if cfg.arms_rest and lost_for > cfg.lost_hold:
-                k = 1.0 - math.exp(-dt * 3.0 / max(0.05, cfg.lost_return))
+                ease = _ramp(lost_for - cfg.lost_hold, 0.0, min(0.25, max(0.05, cfg.lost_return) * 0.5))
+                k = ease * (1.0 - math.exp(-dt * 3.0 / max(0.05, cfg.lost_return)))
             for b in bones:
                 if b in res.bones:
                     continue  # 今フレームで求まっている (肩)

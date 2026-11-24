@@ -375,5 +375,57 @@ ok &= check("VMC 親指マッピング", _cap("leftThumbMetacarpal") == "LeftThu
 osc_pkt = osc_message("/VMC/Ext/OK", 1)
 ok &= check("OSC メッセージは4バイト境界", len(osc_pkt) % 4 == 0 and osc_pkt.startswith(b"/VMC/Ext/OK\x00"))
 
+# ---- 脚: 画角外検出・部分ロスト時の自然垂下・膝の過伸展防止
+def leg_frame(knee_z=-0.25, ank_z=0.1, leg_vis=1.0, ank_img_y=0.90, knee_img_y=0.72):
+    w = body(True)
+    # 脚を持ち上げて膝を後ろへ曲げる姿勢 (MediaPipe: -z が前方, +y が下)
+    w[25] = L(x=0.1, y=0.35, z=knee_z, visibility=leg_vis)
+    w[26] = L(x=-0.1, y=0.35, z=knee_z, visibility=leg_vis)
+    w[27] = L(x=0.1, y=0.65, z=ank_z, visibility=leg_vis)
+    w[28] = L(x=-0.1, y=0.65, z=ank_z, visibility=leg_vis)
+    im = img_pose(0.5)
+    im[25] = L(x=0.55, y=knee_img_y, z=0.0, visibility=leg_vis)
+    im[26] = L(x=0.45, y=knee_img_y, z=0.0, visibility=leg_vis)
+    im[27] = L(x=0.55, y=ank_img_y, z=0.0, visibility=leg_vis)
+    im[28] = L(x=0.45, y=ank_img_y, z=0.0, visibility=leg_vis)
+    return w, im
+
+sv_leg = Solver(SolverConfig(mirror=False, smooth=0.0, use_legs=True, arms_rest=True, lost_hold=0.2, lost_return=0.3))
+# まず通常状態で脚を上げた姿勢を数フレーム記録
+for i in range(5):
+    wl, il = leg_frame(knee_z=-0.35, ank_z=0.05)
+    r_leg_on = sv_leg.solve(pose_world=wl, pose_image=il, t=i / 30.0)
+ul_dir_on = q_rot(r_leg_on.bones["leftUpperLeg"], np.array([0.0, -1.0, 0.0]))
+ok &= check("脚トラッキング中は上腿が前へ上がる", ul_dir_on[2] > 0.3)
+
+# 足首・膝が画角外 (y=1.15) に出たら lost_hold 中は保持し、その後自然に下がる
+leg_dirs = []
+for i in range(5, 65):
+    wl, il = leg_frame(knee_z=-0.35, ank_z=0.05, ank_img_y=1.18, knee_img_y=1.12)
+    rl = sv_leg.solve(pose_world=wl, pose_image=il, t=i / 30.0)
+    leg_dirs.append(q_rot(rl.bones["leftUpperLeg"], np.array([0.0, -1.0, 0.0])))
+leg_steps = [math.degrees(angle_between(leg_dirs[i], leg_dirs[i - 1])) for i in range(1, len(leg_dirs))]
+ok &= check(f"画角外の脚は滑らかに下りる (最大 {max(leg_steps):.1f}°/F, 最終Y={leg_dirs[-1][1]:.2f})",
+            max(leg_steps) < 8.0 and leg_dirs[-1][1] < -0.98)
+
+# 膝だけ映り足首のみ画角外: 上腿は追い続け、下腿だけ垂直 (IDENT) に戻る
+sv_knee = Solver(SolverConfig(mirror=False, smooth=0.0, use_legs=True, arms_rest=True, lost_hold=0.1, lost_return=0.25))
+for i in range(5):
+    wk, ik = leg_frame(knee_z=-0.3, ank_z=0.25, ank_img_y=0.92, knee_img_y=0.70)
+    sv_knee.solve(pose_world=wk, pose_image=ik, t=i / 30.0)
+for i in range(5, 50):
+    wk, ik = leg_frame(knee_z=-0.3, ank_z=0.25, ank_img_y=1.18, knee_img_y=0.70)
+    rk = sv_knee.solve(pose_world=wk, pose_image=ik, t=i / 30.0)
+ul_k = q_rot(rk.bones["leftUpperLeg"], np.array([0.0, -1.0, 0.0]))
+ll_k = q_rot(rk.bones["leftLowerLeg"], np.array([0.0, -1.0, 0.0]))
+ok &= check("膝のみ見えている時は上腿が追従し下腿は自然に戻る", ul_k[2] > 0.3 and ll_k[1] < -0.95)
+
+# 膝の過伸展クランプ: 膝より大きく前方 (-z) に足首が突き出ても逆関節にならない
+sv_hyp = Solver(SolverConfig(mirror=False, smooth=0.0, use_legs=True))
+wh, ih = leg_frame(knee_z=0.0, ank_z=-0.35)
+rh = sv_hyp.solve(pose_world=wh, pose_image=ih, t=0.0)
+shin_h = q_rot(rh.bones["leftLowerLeg"], np.array([0.0, -1.0, 0.0]))
+ok &= check("膝の過伸展 (+Z 方向) が防止される", shin_h[2] <= 0.025)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
