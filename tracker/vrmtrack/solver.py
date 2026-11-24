@@ -192,11 +192,17 @@ class SolveResult:
 
 
 class _Euro:
-    """One Euro フィルタ (スカラー・ベクトル・四元数)。"""
+    """方向コヒーレンス加重・2 次カスケード One Euro フィルタ (スカラー・ベクトル・四元数)。"""
 
     def __init__(self) -> None:
         self.prev = None
+        self.stage2 = None
+        self.raw_prev = None
         self.speed = 0.0
+        self.speed_ema = 0.0
+        self.coh_env = 0.0
+        self.vel_env = 0.0
+        self.vel_vec = np.zeros(3, dtype=float)
 
     @staticmethod
     def alpha(cutoff: float, dt: float) -> float:
@@ -208,22 +214,69 @@ class _Euro:
         self.speed += a_d * (dist / dt - self.speed)
         return self.alpha(mc + beta * abs(self.speed), dt)
 
-    def quat(self, q: np.ndarray, dt: float, mc: float, beta: float) -> np.ndarray:
+    def reset_quat(self, q: np.ndarray) -> None:
+        self.prev = q
+        self.stage2 = q
+        self.raw_prev = q
+        self.speed = 0.0
+        self.speed_ema = 0.0
+        self.coh_env = 0.0
+        self.vel_env = 0.0
+        self.vel_vec.fill(0.0)
+
+    def quat(self, q: np.ndarray, dt: float, mc: float, beta: float, stab: float = 0.0) -> np.ndarray:
         q = np.asarray(q, dtype=float)
         if not np.all(np.isfinite(q)):
-            return self.prev if self.prev is not None else IDENT.copy()
+            out = self.stage2 if self.stage2 is not None else self.prev
+            return out if out is not None else IDENT.copy()
         n = float(np.linalg.norm(q))
         if n < 1e-12:
-            return self.prev if self.prev is not None else IDENT.copy()
+            out = self.stage2 if self.stage2 is not None else self.prev
+            return out if out is not None else IDENT.copy()
         q = q / n
         if self.prev is None:
-            self.prev = q
+            self.reset_quat(q)
             return q
-        a = self._cut(q_angle(self.prev, q), dt, mc, beta)
-        out = q_slerp(self.prev, q, a)
-        if np.all(np.isfinite(out)):
-            self.prev = out
-        return self.prev
+
+        ref = self.raw_prev if self.raw_prev is not None else self.prev
+        dq = q_mul(q, q_inv(ref))
+        if dq[3] < 0.0:
+            dq = -dq
+        v_norm = float(np.linalg.norm(dq[:3]))
+        theta = 2.0 * math.atan2(v_norm, max(0.0, float(dq[3])))
+        vel = (theta / dt) * (dq[:3] / v_norm) if v_norm > 1e-9 else np.zeros(3, dtype=float)
+        self.raw_prev = q
+
+        a_d = self.alpha(3.0, dt)
+        self.vel_vec = self.vel_vec + a_d * (vel - self.vel_vec)
+        self.speed_ema += a_d * (theta / dt - self.speed_ema)
+        v_mag = float(np.linalg.norm(self.vel_vec))
+        self.speed = v_mag
+        c_inst = min(1.0, v_mag / max(1e-6, self.speed_ema)) if self.speed_ema > 1e-6 else 0.0
+
+        # 速い立ち上がり・緩やかな減衰 (150ms 級) により、手振り折り返しでの遮断周波数急落 (位相鞭打ち) を防ぐ
+        a_rel = self.alpha(1.2, dt)
+        self.coh_env = c_inst if c_inst > self.coh_env else self.coh_env + a_rel * (c_inst - self.coh_env)
+        v_stroke = v_mag * self.coh_env
+        self.vel_env = v_stroke if v_stroke > self.vel_env else self.vel_env + a_rel * (v_stroke - self.vel_env)
+
+        mc_eff = mc
+        if stab > 0.0:
+            cur_out = self.stage2 if self.stage2 is not None else self.prev
+            amp = _clamp01(q_angle(cur_out, q) / max(1e-6, stab))
+            gate = max(self.coh_env * self.coh_env, amp)
+            strength = min(2.0, stab / math.radians(1.0))
+            mc_eff = mc / (1.0 + 10.0 * strength * (1.0 - gate) ** 2)
+
+        # 2 段カスケード (-12 dB/oct, 臨界減衰的) の実効遮断周波数を揃えるため 1.55 倍
+        a = self.alpha(1.55 * (mc_eff + beta * self.vel_env), dt)
+        s1 = q_slerp(self.prev, q, a)
+        base2 = self.stage2 if self.stage2 is not None else self.prev
+        s2 = q_slerp(base2, s1, a)
+        if np.all(np.isfinite(s1)) and np.all(np.isfinite(s2)):
+            self.prev = s1
+            self.stage2 = s2
+        return self.stage2 if self.stage2 is not None else self.prev
 
     def value(self, v, dt: float, mc: float, beta: float):
         v = np.asarray(v, dtype=float)
@@ -266,7 +319,6 @@ class Solver:
         self._t_prev: float | None = None
         self._raw: dict = {}
         self._capture: dict | None = None
-        self._stab: dict[str, np.ndarray] = {}
         self._img = None
         self.aspect = 16.0 / 9.0       # 画像の横/縦 (トラッカーが毎フレーム入れる)
         self._sh_base: list | None = None
@@ -877,40 +929,27 @@ class Solver:
         return held
 
     # ------------------------------------------------------------------ 平滑化
-    def _stabilize(self, k: str, q: np.ndarray) -> np.ndarray:
-        """細かい揺れ (しきい値以下の動き) を止める。大きな動きはそのまま通す。"""
-        thr = math.radians(2.0 * max(0.0, self.cfg.stabilize)) * (0.5 if "Eye" in k else 1.0)
-        prev = self._stab.get(k)
-        if thr <= 0.0 or prev is None:
-            self._stab[k] = q
-            return q
-        r = q_angle(prev, q) / thr
-        w = 1.0 if r >= 1.0 else r * r
-        out = q_slerp(prev, q, w)
-        self._stab[k] = out
-        return out
-
     def _smooth(self, res: SolveResult, dt: float, held: set) -> SolveResult:
         s = max(0.0, min(0.95, self.cfg.smooth))
         if s <= 0.0:
             for k, q in res.bones.items():
                 qv = np.asarray(q, dtype=float)
                 if np.all(np.isfinite(qv)):
-                    self._bone_f.setdefault(k, _Euro()).prev = qv
-                    self._stab[k] = qv
+                    self._bone_f.setdefault(k, _Euro()).reset_quat(qv)
             self._last_out.update(res.bones)
             return res
         mc = 0.5 * 10 ** (1.3 * (1.0 - s))          # 止まっているときの遮断周波数 (Hz)
         beta = 0.1 + 2.4 * _clamp01(self.cfg.responsiveness)
+        stab_base = math.radians(2.0 * max(0.0, self.cfg.stabilize))
         out = {}
         for k, q in res.bones.items():
             f = self._bone_f.setdefault(k, _Euro())
             if k in held:
-                f.prev = q
-                self._stab[k] = q
+                f.reset_quat(np.asarray(q, dtype=float))
             else:
-                q = f.quat(np.asarray(q, dtype=float), dt, mc * (1.5 if "Eye" in k else 1.0), beta)
-                q = self._stabilize(k, q)
+                eye_mul = 1.5 if "Eye" in k else 1.0
+                stab_thr = stab_base * (0.5 if "Eye" in k else 1.0)
+                q = f.quat(np.asarray(q, dtype=float), dt, mc * eye_mul, beta, stab=stab_thr)
             out[k] = q
         res.bones = out
         self._last_out.update(out)

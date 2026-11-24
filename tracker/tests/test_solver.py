@@ -427,5 +427,32 @@ rh = sv_hyp.solve(pose_world=wh, pose_image=ih, t=0.0)
 shin_h = q_rot(rh.bones["leftLowerLeg"], np.array([0.0, -1.0, 0.0]))
 ok &= check("膝の過伸展 (+Z 方向) が防止される", shin_h[2] <= 0.025)
 
+# ---- 方向コヒーレンス加重 + 2次カスケードフィルタ: 手振り滑らかさ & 交互ジッター抑制
+eu_wave = _Euro()
+wave_raw = []
+wave_filt = []
+rng_w = np.random.default_rng(7)
+for i in range(90):
+    t_w = i / 30.0
+    ang_w = math.radians(28.0) * math.sin(2.0 * math.pi * 1.2 * t_w) + math.radians(float(rng_w.normal(0.0, 0.35)))
+    q_raw = q_axis_angle([0.0, 0.0, 1.0], ang_w)
+    wave_raw.append(q_raw)
+    wave_filt.append(eu_wave.quat(q_raw, 1.0 / 30.0, 1.2, 1.3, stab=math.radians(1.0)))
+raw_jerk = float(np.std(np.diff([2.0 * math.atan2(q[2], q[3]) for q in wave_raw[30:]], n=3)))
+filt_jerk = float(np.std(np.diff([2.0 * math.atan2(q[2], q[3]) for q in wave_filt[30:]], n=3)))
+filt_amp = max(abs(2.0 * math.atan2(q[2], q[3])) for q in wave_filt[30:])
+ok &= check(f"手振り軌道のジャークを大幅に低減しつつ振幅を維持 (jerk比={filt_jerk / raw_jerk:.2f}, 振幅={math.degrees(filt_amp):.1f}°)",
+            filt_jerk < raw_jerk * 0.50 and math.degrees(filt_amp) > 22.0)
+
+eu_jit = _Euro()
+jit_deg = []
+for i in range(60):
+    sgn = 1.0 if (i % 2 == 0) else -1.0
+    q_j = q_axis_angle([0.0, 1.0, 0.0], math.radians(0.8 * sgn))
+    q_o = eu_jit.quat(q_j, 1.0 / 30.0, 2.0, 1.3, stab=math.radians(1.0))
+    jit_deg.append(math.degrees(2.0 * math.atan2(q_o[1], q_o[3])))
+ok &= check(f"交互微細振動 (±0.8°) を 1/4 以下に減衰 (std={float(np.std(jit_deg[20:])):.3f}°)",
+            float(np.std(jit_deg[20:])) < 0.20)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
