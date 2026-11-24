@@ -280,6 +280,8 @@ func build(win, vb: VBoxContainer) -> void:
 	_sliders["shoulder_sens"] = UiWidgets.slider(c_up["body"], "肩の上下の感度", 0.0, 1.0, 0.02, 0.5, func(v: float): apply_set.call({"shoulder_sens": v}), is_sync)
 	_sliders["shoulder_gain"] = UiWidgets.slider(c_up["body"], "肩の動きの倍率", 0.0, 2.0, 0.05, 1.0, func(v: float): apply_set.call({"shoulder_gain": v}), is_sync)
 	_checks["arms_rest"] = UiWidgets.check(c_up["body"], "検出ロスト時は腕・脚を自然に戻す", true, func(on: bool): apply_set.call({"arms_rest": on}), is_sync)
+	_checks["avoid_body"] = UiWidgets.check(c_up["body"], "胸・頭へのめり込みを避ける", true, func(on: bool): apply_set.call({"avoid_body": on}), is_sync)
+	_checks["hand_spring_collide"] = UiWidgets.check(c_up["body"], "手で髪・揺れものを押す", true, func(on: bool): apply_set.call({"hand_spring_collide": on}), is_sync)
 	_sliders["forearm_twist"] = UiWidgets.slider(c_up["body"], "前腕のねじり配分", 0.0, 1.0, 0.05, 0.7, func(v: float): apply_set.call({"forearm_twist": v}), is_sync)
 
 	# ---- 脚・腰 (legs)

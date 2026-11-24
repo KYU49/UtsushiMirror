@@ -682,14 +682,13 @@ func _poll_vmc() -> void:
 		# VMC が 1.5 秒途切れたら (トラッカー停止など) 上書きを解除して通常の動きに戻す
 		if _last_vmc_msec > 0 and Time.get_ticks_msec() - _last_vmc_msec > 1500:
 			_last_vmc_msec = 0
-			current_vrm.vmc_bone_overrides.clear()
-			current_vrm.force_camera_gaze = false
-			current_vrm.has_vmc_hips_offset = false
+			_reset_vrm_tracking_state()
 		return
 	_last_vmc_msec = Time.get_ticks_msec()
 	var frame = JSON.parse_string(json_str)
 	if typeof(frame) != TYPE_DICTIONARY:
 		return
+	_sync_vrm_tracking_flags()
 
 	var root_pose = frame.get("root", null)
 	if typeof(root_pose) == TYPE_DICTIONARY:
@@ -780,6 +779,7 @@ func load_vrm(path: String, keep_camera: bool = false) -> Dictionary:
 	current_vrm.spring_bone.gravity_scale = _spring_gravity_scale
 	current_vrm.spring_bone.stiffness_scale = _spring_stiffness_scale
 	current_vrm.spring_bone.external_wind = lighting_rig.wind
+	_sync_vrm_tracking_flags()
 
 	var abs_path: String = current_vrm.model_path
 	if not recent_vrm_paths.has(abs_path):
@@ -1973,22 +1973,36 @@ func apply_tracking_settings(d: Dictionary) -> void:
 		stop_tracking()
 		start_tracking()
 	else:
+		_sync_vrm_tracking_flags()
 		state_changed.emit()
 
 
+func _sync_vrm_tracking_flags() -> void:
+	if current_vrm == null or tracking == null:
+		return
+	current_vrm.avoid_body_enabled = bool(tracking.settings.get("avoid_body", true))
+	current_vrm.hand_spring_collide_enabled = bool(tracking.settings.get("hand_spring_collide", true))
+
+
+func _reset_vrm_tracking_state() -> void:
+	if current_vrm == null:
+		return
+	current_vrm.vmc_bone_overrides.clear()
+	current_vrm.force_camera_gaze = false
+	current_vrm.has_vmc_hips_offset = false
+	if current_vrm.arm_avoidance != null:
+		current_vrm.arm_avoidance.reset()
+	if current_vrm.spring_bone != null:
+		current_vrm.spring_bone.extra_colliders.clear()
+
+
 func _clear_vmc_pose() -> void:
-	if current_vrm != null:
-		current_vrm.vmc_bone_overrides.clear()
-		current_vrm.force_camera_gaze = false
-		current_vrm.has_vmc_hips_offset = false
+	_reset_vrm_tracking_state()
 
 
 func stop_tracking() -> void:
 	tracking.stop()
-	if current_vrm != null:
-		current_vrm.vmc_bone_overrides.clear()
-		current_vrm.force_camera_gaze = false
-		current_vrm.has_vmc_hips_offset = false
+	_reset_vrm_tracking_state()
 	state_changed.emit()
 
 

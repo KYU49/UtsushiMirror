@@ -15,6 +15,7 @@ const VrmExpressionsScript := preload("res://scripts/vrm/vrm_expressions.gd")
 const VrmLookAtScript := preload("res://scripts/vrm/vrm_lookat.gd")
 const VrmConstraintsScript := preload("res://scripts/vrm/vrm_constraints.gd")
 const VrmSpringBoneScript := preload("res://scripts/vrm/vrm_springbone.gd")
+const VrmArmAvoidanceScript := preload("res://scripts/vrm/vrm_arm_avoidance.gd")
 
 var model_path: String = ""
 var vrm_version: String = "1.0"
@@ -24,6 +25,7 @@ var expressions
 var lookat
 var constraints
 var spring_bone
+var arm_avoidance = VrmArmAvoidanceScript.new()
 var materials: Array = []
 
 # External / Layered pose & animation hooks
@@ -37,6 +39,8 @@ var has_direct_hips_offset: bool = false
 var vmc_bone_overrides: Dictionary = {} # human_bone -> Quaternion
 var vmc_hips_offset: Vector3 = Vector3.ZERO
 var has_vmc_hips_offset: bool = false
+var avoid_body_enabled: bool = true
+var hand_spring_collide_enabled: bool = true
 
 var lookat_world_target: Vector3 = Vector3(0.0, 1.4, 2.0)
 ## トラッキング中に「カメラ目線」を選んだとき: 目の向きはトラッキングを使わず、LookAt の設定に関係なくカメラを見る
@@ -134,6 +138,9 @@ func step(dt: float) -> void:
 	if hips_delta.length_squared() > 1e-10:
 		humanoid.set_hips_translation_delta(hips_delta)
 
+	if avoid_body_enabled and arm_avoidance != null and not vmc_bone_overrides.is_empty():
+		arm_avoidance.apply(self, humanoid, spring_bone, composed_bones, dt)
+
 	# 2. NodeConstraints
 	if constraints != null:
 		constraints.update()
@@ -189,6 +196,10 @@ func step(dt: float) -> void:
 
 	# 5. SpringBone
 	if spring_bone != null:
+		if hand_spring_collide_enabled and arm_avoidance != null and not vmc_bone_overrides.is_empty():
+			spring_bone.extra_colliders = arm_avoidance.build_hand_spring_colliders(humanoid)
+		else:
+			spring_bone.extra_colliders.clear()
 		spring_bone.update(dt)
 
 

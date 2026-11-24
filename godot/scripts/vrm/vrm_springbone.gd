@@ -10,6 +10,7 @@ const FIXED_SUBSTEP := 1.0 / 120.0
 const MAX_ACCUM_DT := 0.1
 
 var colliders: Array = [] # Array[ColliderDef]
+var extra_colliders: Array = [] # Array[ColliderDef] (ワールド空間 w_p0/w_p1 指定の外部コライダー)
 var collider_groups: Array = [] # Array[Array[int]]
 var springs: Array = [] # Array[SpringChain]
 var external_wind: Vector3 = Vector3.ZERO
@@ -284,7 +285,7 @@ func _step_once(dt: float) -> void:
 			next_tail = head_center + dir * js.bone_length
 
 			# Colliders in world space -> project back to bone_length sphere after each collider per VRM 1.0 spec
-			if not chain.collider_indices.is_empty():
+			if not chain.collider_indices.is_empty() or not extra_colliders.is_empty():
 				var tail_world := center_xf * next_tail
 				for col_idx in chain.collider_indices:
 					var cdef: ColliderDef = colliders[col_idx]
@@ -295,6 +296,15 @@ func _step_once(dt: float) -> void:
 						var d_w := pushed - head_world
 						if d_w.length_squared() > 1e-10:
 							tail_world = head_world + d_w.normalized() * js.bone_length
+				for ec in extra_colliders:
+					var cdef_ex: ColliderDef = ec
+					if cdef_ex == null:
+						continue
+					var pushed_ex := _resolve_collider(cdef_ex, tail_world, js.hit_radius)
+					if pushed_ex != tail_world:
+						var d_wx := pushed_ex - head_world
+						if d_wx.length_squared() > 1e-10:
+							tail_world = head_world + d_wx.normalized() * js.bone_length
 				next_tail = center_inv * tail_world
 
 			# Optional joint angle limit (cone / hinge)

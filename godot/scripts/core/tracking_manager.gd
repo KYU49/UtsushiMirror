@@ -62,6 +62,8 @@ const DEFAULTS := {
 	"lost_hold": 0.5,
 	"lost_return": 0.6,
 	"hips_move": true,
+	"avoid_body": true,
+	"hand_spring_collide": true,
 	# キャリブレーション
 	"calib_delay": 0,
 }
@@ -69,7 +71,7 @@ const LIVE_KEYS := ["mirror", "smooth", "stabilize", "responsiveness", "head_gai
 	"gaze_link", "gaze_limit_h", "gaze_limit_up", "gaze_limit_down", "blink_link", "blink_sens", "mouth_gain", "expressions", "happy_sens", "happy_gain", "angry_sens", "angry_gain",
 	"surprised_sens", "surprised_gain", "fingers", "forearm_twist", "arm_from_hand", "shoulder_gain", "shoulder_sens", "hand_edge", "arms_rest",
 	"lost_hold", "lost_return", "hips_move"]
-const NO_RESTART_KEYS := ["calib_delay"]
+const NO_RESTART_KEYS := ["calib_delay", "avoid_body", "hand_spring_collide"]
 const MODES := {
 	"face": {"label": "顔だけ", "parts": [true, false, false, false]},
 	"upper": {"label": "顔と手 (上半身)", "parts": [true, true, true, false]},
