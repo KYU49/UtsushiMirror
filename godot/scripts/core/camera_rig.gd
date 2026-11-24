@@ -123,6 +123,31 @@ func get_camera_world_position() -> Vector3:
 	return main_camera.global_position if main_camera != null else Vector3(0.0, 1.4, 2.2)
 
 
+func apply_world_transform(pos: Vector3, rot: Quaternion, fov: float) -> void:
+	fov_deg = clampf(fov, 10.0, 120.0)
+	orthographic = false
+	var qn := rot.normalized()
+	var xf := Transform3D(Basis(qn), pos)
+	for cam in [main_camera, output_camera]:
+		if cam == null:
+			continue
+		cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+		cam.fov = fov_deg
+		cam.near = 0.02
+		cam.far = 100.0
+		if cam.is_inside_tree():
+			cam.global_transform = xf
+		else:
+			cam.transform = xf
+	var fwd := (qn * Vector3(0.0, 0.0, -1.0)).normalized()
+	distance = clampf(distance, 0.25, 20.0)
+	target = pos + fwd * distance
+	var back := -fwd
+	pitch_deg = clampf(rad_to_deg(asin(clampf(back.y, -0.999, 0.999))), -85.0, 85.0)
+	yaw_deg = rad_to_deg(atan2(back.x, back.z))
+	camera_changed.emit()
+
+
 func handle_input(event: InputEvent) -> bool:
 	if not input_enabled:
 		return false

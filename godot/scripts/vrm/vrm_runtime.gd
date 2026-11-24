@@ -39,8 +39,13 @@ var has_direct_hips_offset: bool = false
 var vmc_bone_overrides: Dictionary = {} # human_bone -> Quaternion
 var vmc_hips_offset: Vector3 = Vector3.ZERO
 var has_vmc_hips_offset: bool = false
+var vmc_root_rot: Quaternion = Quaternion.IDENTITY
+var has_vmc_root_rot: bool = false
 var avoid_body_enabled: bool = true
 var hand_spring_collide_enabled: bool = true
+var last_composed_bones: Dictionary = {}
+var last_hips_delta: Vector3 = Vector3.ZERO
+var last_effective_expressions: Dictionary = {}
 
 var lookat_world_target: Vector3 = Vector3(0.0, 1.4, 2.0)
 ## トラッキング中に「カメラ目線」を選んだとき: 目の向きはトラッキングを使わず、LookAt の設定に関係なくカメラを見る
@@ -121,6 +126,9 @@ func step(dt: float) -> void:
 
 	for bname in vmc_bone_overrides.keys():
 		composed_bones[bname] = vmc_bone_overrides[bname]
+	if has_vmc_root_rot:
+		var base_hips: Quaternion = composed_bones.get("hips", Quaternion.IDENTITY)
+		composed_bones["hips"] = (vmc_root_rot * base_hips).normalized()
 	if has_vmc_hips_offset:
 		hips_delta = vmc_hips_offset
 
@@ -140,6 +148,8 @@ func step(dt: float) -> void:
 
 	if avoid_body_enabled and arm_avoidance != null and not vmc_bone_overrides.is_empty():
 		arm_avoidance.apply(self, humanoid, spring_bone, composed_bones, dt)
+	last_composed_bones = composed_bones.duplicate()
+	last_hips_delta = hips_delta
 
 	# 2. NodeConstraints
 	if constraints != null:
@@ -182,6 +192,7 @@ func step(dt: float) -> void:
 	# 4. Expressions (morphs, materialColorBinds, textureTransformBinds, overrides)
 	if expressions != null:
 		var expr_res: Dictionary = expressions.update(dt, lookat_exprs, idle_blink_weight)
+		last_effective_expressions = expr_res.get("effective", {}).duplicate()
 		# Re-apply bone LookAt attenuated if overrideLookAt blocked/blended eye bones
 		var lookat_mul: float = float(expr_res.get("lookat_mul", 1.0))
 		if lookat != null and lookat.lookat_type == "bone" and lookat_mul < 0.999 and not tracked_eyes:
@@ -193,6 +204,8 @@ func step(dt: float) -> void:
 			else:
 				var tgt2: Vector3 = lookat.manual_target if lookat.mode == "manual" else lookat_world_target
 				lookat.compute_and_apply(humanoid, tgt2, has_lookat_target or lookat.mode == "manual", lookat_mul)
+	else:
+		last_effective_expressions.clear()
 
 	# 5. SpringBone
 	if spring_bone != null:

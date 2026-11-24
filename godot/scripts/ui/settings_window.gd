@@ -75,6 +75,7 @@ var _active_tab_id: String = "Model"
 var _tab_anim
 var _tab_expr
 var _tab_tracking
+var _tab_api
 var _tab_license
 
 var _recent_cfg_btn: OptionButton
@@ -351,6 +352,7 @@ func _ensure_built() -> void:
 	_tab_anim = _tab_handlers["Anim"]
 	_tab_expr = _tab_handlers["Expr"]
 	_tab_tracking = _tab_handlers["Tracking"]
+	_tab_api = _tab_handlers["API/Config"]
 	_tab_license = _tab_handlers["License"]
 
 	# Tracking テスト互換参照をリンク
@@ -423,18 +425,18 @@ func _ensure_built() -> void:
 	ftr_hb.add_child(b_close)
 
 	# ---- ダイアログ / タイマー / スナックバー
-	_dlg_export_cfg = UiWidgets.file_dialog(self, FileDialog.FILE_MODE_SAVE_FILE, PackedStringArray(["*.json ; UtsushiMirror Config"]), func(p: String):
+	_dlg_export_cfg = UiWidgets.file_dialog(self, FileDialog.FILE_MODE_SAVE_FILE, PackedStringArray(["*.umset ; うつしみらー設定ファイル", "*.json ; JSON 設定ファイル"]), func(p: String):
 		if controller == null:
 			return
 		var r: Dictionary = controller.export_settings(p)
 		if r.get("ok", false):
-			show_snackbar("設定を書き出しました: " + p.get_file())
+			show_snackbar("設定を書き出しました: " + str(r.get("path", p)).get_file())
 			_refresh_recent_settings()
 		else:
 			show_snackbar("書き出し失敗: " + str(r.get("error", "")))
-	, "vrmviewer_settings.json")
+	, "utsushimirror_settings.umset")
 
-	_dlg_import_cfg = UiWidgets.file_dialog(self, FileDialog.FILE_MODE_OPEN_FILE, PackedStringArray(["*.json ; UtsushiMirror Config"]), func(p: String):
+	_dlg_import_cfg = UiWidgets.file_dialog(self, FileDialog.FILE_MODE_OPEN_FILE, PackedStringArray(["*.umset, *.json ; うつしみらー設定ファイル (*.umset, *.json)", "*.umset ; うつしみらー設定ファイル", "*.json ; JSON 設定ファイル"]), func(p: String):
 		if controller == null:
 			return
 		var r: Dictionary = controller.import_settings(p)
@@ -457,6 +459,8 @@ func _ensure_built() -> void:
 	_trk_timer.timeout.connect(func():
 		if _active_tab_id == "Tracking" and _tab_tracking != null:
 			_tab_tracking.update_live()
+		elif _active_tab_id == "API/Config" and _tab_api != null:
+			_tab_api.update_live()
 	)
 	add_child(_trk_timer)
 
@@ -489,7 +493,7 @@ func _update_active_polling() -> void:
 	if _trk_timer == null:
 		return
 	var active_win := visible or DisplayServer.get_name() == "headless"
-	if active_win and _active_tab_id == "Tracking":
+	if active_win and (_active_tab_id == "Tracking" or _active_tab_id == "API/Config"):
 		if _trk_timer.is_stopped():
 			_trk_timer.start()
 	else:

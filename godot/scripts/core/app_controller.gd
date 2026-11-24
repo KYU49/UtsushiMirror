@@ -8,6 +8,7 @@ signal state_changed
 signal model_loaded(info: Dictionary)
 
 const VrmLoaderScript := preload("res://scripts/vrm/vrm_loader.gd")
+const VrmHumanoidScript := preload("res://scripts/vrm/vrm_humanoid.gd")
 const VrmaLoaderScript := preload("res://scripts/vrm/vrma_loader.gd")
 const AnimCategoryScript := preload("res://scripts/core/anim_category.gd")
 const NpzMotionLoaderScript := preload("res://scripts/vrm/npz_motion_loader.gd")
@@ -59,6 +60,23 @@ var recent_settings_paths: Array[String] = []
 const RECENT_SETTINGS_MAX := 10
 var ws_port: int = 19100
 var osc_port: int = 39539
+var vmc_recv_enabled: bool = true
+var vmc_recv_bind_lan: bool = false
+var vmc_recv_apply_root: bool = true
+var vmc_recv_apply_bones: bool = true
+var vmc_recv_apply_expressions: bool = true
+var vmc_recv_apply_camera: bool = false
+var vmc_send_enabled: bool = false
+var vmc_send_host: String = "127.0.0.1"
+var vmc_send_port: int = 39540
+var vmc_send_fps: int = 60
+var vmc_send_bones: bool = true
+var vmc_send_expressions: bool = true
+var vmc_send_camera: bool = false
+var vmc_send_vrm0_names: bool = true
+var _vmc_send_accum: float = 0.0
+var _last_vmc_blend_apply_msec: int = 0
+var _last_vmc_err: String = ""
 var _last_animation: String = "for-test_a-pose"
 var _last_lookat_mode: String = "camera"
 var _last_lookat_manual_target: Vector3 = Vector3(0.0, 1.4, 2.0)
@@ -104,6 +122,61 @@ const VMC_EXPR_ALIASES := {
 	"Blink_L": "blinkLeft",
 	"Blink_R": "blinkRight",
 }
+const VMC_EXPR_LOWER := {
+	"joy": "happy",
+	"happy": "happy",
+	"sorrow": "sad",
+	"sad": "sad",
+	"fun": "relaxed",
+	"relaxed": "relaxed",
+	"angry": "angry",
+	"surprised": "surprised",
+	"surprise": "surprised",
+	"neutral": "neutral",
+	"a": "aa",
+	"aa": "aa",
+	"i": "ih",
+	"ih": "ih",
+	"u": "ou",
+	"ou": "ou",
+	"e": "ee",
+	"ee": "ee",
+	"o": "oh",
+	"oh": "oh",
+	"blink": "blink",
+	"blink_l": "blinkLeft",
+	"blinkl": "blinkLeft",
+	"blinkleft": "blinkLeft",
+	"blink_r": "blinkRight",
+	"blinkr": "blinkRight",
+	"blinkright": "blinkRight",
+	"lookup": "lookUp",
+	"lookdown": "lookDown",
+	"lookleft": "lookLeft",
+	"lookright": "lookRight",
+}
+const VRM0_EXPR_EXPORT_MAP := {
+	"happy": "Joy",
+	"sad": "Sorrow",
+	"relaxed": "Fun",
+	"angry": "Angry",
+	"surprised": "Surprised",
+	"neutral": "Neutral",
+	"aa": "A",
+	"ih": "I",
+	"ou": "U",
+	"ee": "E",
+	"oh": "O",
+	"blink": "Blink",
+	"blinkLeft": "Blink_L",
+	"blinkRight": "Blink_R",
+	"lookUp": "LookUp",
+	"lookDown": "LookDown",
+	"lookLeft": "LookLeft",
+	"lookRight": "LookRight",
+}
+static var _vmc_bone_map_lower: Dictionary = {}
+static var _vrm_bone_to_vmc_map: Dictionary = {}
 
 
 func _ready() -> void:
@@ -163,6 +236,7 @@ func _ready() -> void:
 
 	if bridge != null:
 		var ok := bridge.start_servers(ws_port, osc_port)
+		_apply_vmc_bridge_config(false)
 		print("AppController ready, bridge servers=", ok)
 
 	if settings_window != null and settings_window.has_method("bind_controller"):
@@ -289,6 +363,7 @@ func _process(delta: float) -> void:
 		current_vrm.expressions.mouth_locked = lip_sync.active or motion.talking
 
 	capture_manager.process_frame(delta)
+	_send_vmc(delta)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -629,6 +704,14 @@ func _dispatch_rpc(client_id: int, id_json: String, method: String, params: Dict
 			_reply_ok(client_id, id_json, vc)
 		"get_vcam_status":
 			_reply_ok(client_id, id_json, capture_manager.get_vcam_status())
+		"get_vmc_settings":
+			_reply_ok(client_id, id_json, get_vmc_state())
+		"set_vmc_settings":
+			var vr: Dictionary = apply_vmc_settings(params)
+			if vr.get("ok", false):
+				_reply_ok(client_id, id_json, vr.get("vmc", get_vmc_state()))
+			else:
+				_reply_err(client_id, id_json, -32012, str(vr.get("error", "set_vmc_settings failed")))
 		"set_hotkeys":
 			hotkey_manager.apply_params(params)
 			_emit_state_changed()
@@ -675,7 +758,12 @@ func _reply_err(client_id: int, id_json: String, code: int, msg: String) -> void
 
 
 func _poll_vmc() -> void:
-	if current_vrm == null:
+	if bridge == null:
+		return
+	if not vmc_recv_enabled:
+		if _last_vmc_msec > 0:
+			_last_vmc_msec = 0
+			_reset_vrm_tracking_state()
 		return
 	var json_str := bridge.poll_vmc_frame()
 	if json_str == "":
@@ -684,64 +772,358 @@ func _poll_vmc() -> void:
 			_last_vmc_msec = 0
 			_reset_vrm_tracking_state()
 		return
-	_last_vmc_msec = Time.get_ticks_msec()
 	var frame = JSON.parse_string(json_str)
 	if typeof(frame) != TYPE_DICTIONARY:
+		return
+	_last_vmc_msec = Time.get_ticks_msec()
+
+	var cam_data = frame.get("camera", null)
+	if vmc_recv_apply_camera and typeof(cam_data) == TYPE_DICTIONARY:
+		var cpos: Array = cam_data.get("pos", [])
+		var cquat: Array = cam_data.get("quat", [])
+		if cpos.size() >= 3 and cquat.size() >= 4:
+			var pos_g := Vector3(-float(cpos[0]), float(cpos[1]), float(cpos[2]))
+			var q_u := Quaternion(float(cquat[0]), -float(cquat[1]), -float(cquat[2]), float(cquat[3])).normalized()
+			var rot_g := (q_u * Quaternion(Vector3.UP, PI)).normalized()
+			camera_rig.apply_world_transform(pos_g, rot_g, float(cam_data.get("fov_deg", camera_rig.fov_deg)))
+
+	if current_vrm == null:
 		return
 	_sync_vrm_tracking_flags()
 
 	var root_pose = frame.get("root", null)
-	if typeof(root_pose) == TYPE_DICTIONARY:
-		var pos: Array = root_pose.get("pos", [0.0, 0.0, 0.0])
-		if pos.size() >= 3:
-			# VMC は Unity 座標 (左手系) → VRM/Godot 座標へ
-			current_vrm.vmc_hips_offset = Vector3(-float(pos[0]), float(pos[1]), float(pos[2]))
+	var applied_root_pos := false
+	if vmc_recv_apply_root and typeof(root_pose) == TYPE_DICTIONARY:
+		var rpos: Array = root_pose.get("pos", [0.0, 0.0, 0.0])
+		if rpos.size() >= 3:
+			current_vrm.vmc_hips_offset = Vector3(-float(rpos[0]), float(rpos[1]), float(rpos[2]))
 			current_vrm.has_vmc_hips_offset = true
+			applied_root_pos = true
+		var rquat: Array = root_pose.get("quat", [0.0, 0.0, 0.0, 1.0])
+		if rquat.size() >= 4:
+			current_vrm.vmc_root_rot = Quaternion(float(rquat[0]), -float(rquat[1]), -float(rquat[2]), float(rquat[3])).normalized()
+			current_vrm.has_vmc_root_rot = true
+	else:
+		current_vrm.has_vmc_hips_offset = false
+		current_vrm.has_vmc_root_rot = false
 
 	var bones: Dictionary = frame.get("bones", {})
-	# 「カメラ目線」のときは、送られてきた目の向きを使わない (LookAt でカメラを見る)
-	var camera_gaze: bool = str(tracking.settings.get("gaze_mode", "track")) == "camera"
-	current_vrm.force_camera_gaze = camera_gaze
-	if camera_gaze:
-		current_vrm.vmc_bone_overrides.erase("leftEye")
-		current_vrm.vmc_bone_overrides.erase("rightEye")
-	for raw_name in bones.keys():
-		var bname := _vmc_bone_to_vrm(str(raw_name))
-		if camera_gaze and (bname == "leftEye" or bname == "rightEye"):
-			continue
-		var bdata: Dictionary = bones[raw_name]
-		var q: Array = bdata.get("quat", [0.0, 0.0, 0.0, 1.0])
-		if q.size() >= 4:
-			# VMC は Unity 座標 (左手系) → VRM/Godot 座標へ (x, -y, -z, w)
-			current_vrm.vmc_bone_overrides[bname] = Quaternion(float(q[0]), -float(q[1]), -float(q[2]), float(q[3])).normalized()
+	var track_running: bool = tracking != null and tracking.is_running()
+	if vmc_recv_apply_bones:
+		# Web カメラ動作中の「カメラ目線」設定のみアイトラッキングを抑制する
+		var camera_gaze: bool = track_running and str(tracking.settings.get("gaze_mode", "track")) == "camera"
+		current_vrm.force_camera_gaze = camera_gaze
+		if camera_gaze:
+			current_vrm.vmc_bone_overrides.erase("leftEye")
+			current_vrm.vmc_bone_overrides.erase("rightEye")
+		for raw_name in bones.keys():
+			var bname := _vmc_bone_to_vrm(str(raw_name))
+			if camera_gaze and (bname == "leftEye" or bname == "rightEye"):
+				continue
+			var bdata: Dictionary = bones[raw_name]
+			var q: Array = bdata.get("quat", [0.0, 0.0, 0.0, 1.0])
+			if q.size() >= 4:
+				# VMC は Unity 座標 (左手系) → VRM/Godot 座標へ (x, -y, -z, w)
+				current_vrm.vmc_bone_overrides[bname] = Quaternion(float(q[0]), -float(q[1]), -float(q[2]), float(q[3])).normalized()
+			if bname == "hips" and vmc_recv_apply_root and (not applied_root_pos or current_vrm.vmc_hips_offset.length_squared() < 1e-8) and bdata.has("pos"):
+				var bp: Array = bdata.get("pos", [])
+				if bp.size() >= 3:
+					var bp_vec := Vector3(-float(bp[0]), float(bp[1]), float(bp[2]))
+					if bp_vec.length_squared() > 1e-5:
+						var rest_h: float = current_vrm.humanoid.hips_rest_height if current_vrm.humanoid != null else 0.9
+						current_vrm.vmc_hips_offset = Vector3(bp_vec.x, bp_vec.y - rest_h, bp_vec.z)
+						current_vrm.has_vmc_hips_offset = true
+	else:
+		current_vrm.vmc_bone_overrides.clear()
+		current_vrm.force_camera_gaze = false
 
 	var blends: Dictionary = frame.get("blendshapes", {})
-	if bool(frame.get("blend_apply", false)) and not blends.is_empty():
-		var auto_expr: bool = bool(tracking.settings.get("expressions", true))
-		var mapped := {}
-		for k in blends.keys():
-			var ek := str(VMC_EXPR_ALIASES.get(str(k), str(k)))
-			if not auto_expr and VMC_AUTO_EMOTION_KEYS.has(ek):
-				continue
-			if _manual_expr_overrides.has(ek):
-				continue
-			if current_vrm.expressions.mouth_locked and VrmExpressionsScript.MOUTH_SET.has(ek):
-				continue  # リップシンクの間は、トラッキングの口を使わない
-			mapped[ek] = float(blends[k])
-		if not mapped.is_empty():
-			current_vrm.expressions.set_weights(mapped, 0.0, false)
+	if vmc_recv_apply_expressions and not blends.is_empty():
+		var apply_now := bool(frame.get("blend_apply", false))
+		if apply_now:
+			_last_vmc_blend_apply_msec = Time.get_ticks_msec()
+		elif bool(frame.get("blend_dirty", false)):
+			if _last_vmc_blend_apply_msec == 0 or Time.get_ticks_msec() - _last_vmc_blend_apply_msec > 500:
+				apply_now = true
+		if apply_now:
+			var gate_auto_emo: bool = track_running and not bool(tracking.settings.get("expressions", true))
+			var mapped := {}
+			for k in blends.keys():
+				var ek := _vmc_expr_to_vrm(str(k), current_vrm)
+				if gate_auto_emo and VMC_AUTO_EMOTION_KEYS.has(ek):
+					continue
+				if _manual_expr_overrides.has(ek):
+					continue
+				if current_vrm.expressions != null and current_vrm.expressions.mouth_locked and VrmExpressionsScript.MOUTH_SET.has(ek):
+					continue  # リップシンクの間は、トラッキングの口を使わない
+				mapped[ek] = float(blends[k])
+			if not mapped.is_empty() and current_vrm.expressions != null:
+				current_vrm.expressions.set_weights(mapped, 0.0, false)
+
+
+func _send_vmc(delta: float) -> void:
+	if not vmc_send_enabled or bridge == null or current_vrm == null:
+		return
+	var interval := 1.0 / clampf(float(vmc_send_fps), 5.0, 120.0)
+	_vmc_send_accum += delta
+	if _vmc_send_accum < interval:
+		return
+	_vmc_send_accum = fmod(_vmc_send_accum, interval)
+
+	var bones_out := {}
+	var payload := {
+		"bones": bones_out,
+		"blendshapes": {},
+		"blend_apply": false,
+		"seq": 0,
+	}
+	if vmc_send_bones:
+		var hd: Vector3 = current_vrm.last_hips_delta
+		payload["root"] = {
+			"pos": [-hd.x, hd.y, hd.z],
+			"quat": [0.0, 0.0, 0.0, 1.0],
+		}
+		var cb: Dictionary = current_vrm.last_composed_bones
+		for bname in cb.keys():
+			var q: Quaternion = cb[bname]
+			bones_out[_vrm_bone_to_vmc(str(bname))] = {
+				"pos": [0.0, 0.0, 0.0],
+				"quat": [q.x, -q.y, -q.z, q.w],
+			}
+		if bones_out.is_empty():
+			bones_out["Hips"] = {"pos": [0.0, 0.0, 0.0], "quat": [0.0, 0.0, 0.0, 1.0]}
+
+	if vmc_send_expressions:
+		var bl_out := {}
+		var eff: Dictionary = current_vrm.last_effective_expressions
+		for ek in eff.keys():
+			bl_out[_vrm_expr_to_vmc(str(ek), vmc_send_vrm0_names)] = float(eff[ek])
+		payload["blendshapes"] = bl_out
+		payload["blend_apply"] = not bl_out.is_empty()
+
+	if vmc_send_camera and main_camera != null:
+		var cxf: Transform3D = main_camera.global_transform if main_camera.is_inside_tree() else main_camera.transform
+		var cq_g := cxf.basis.orthonormalized().get_rotation_quaternion()
+		var cq_u := (cq_g * Quaternion(Vector3.UP, PI)).normalized()
+		payload["camera"] = {
+			"pos": [-cxf.origin.x, cxf.origin.y, cxf.origin.z],
+			"quat": [cq_u.x, -cq_u.y, -cq_u.z, cq_u.w],
+			"fov_deg": main_camera.fov,
+		}
+
+	bridge.send_vmc_frame(JSON.stringify(payload))
+
+
+static func _ensure_vmc_bone_maps() -> void:
+	if not _vmc_bone_map_lower.is_empty():
+		return
+	for hb in VrmHumanoidScript.ALL_HUMAN_BONES:
+		var pascal := hb.substr(0, 1).to_upper() + hb.substr(1)
+		var vmc_name := pascal
+		if pascal.ends_with("ThumbMetacarpal"):
+			vmc_name = pascal.trim_suffix("ThumbMetacarpal") + "ThumbProximal"
+		elif pascal.ends_with("ThumbProximal"):
+			vmc_name = pascal.trim_suffix("ThumbProximal") + "ThumbIntermediate"
+		_vrm_bone_to_vmc_map[hb] = vmc_name
+		_vmc_bone_map_lower[vmc_name.to_lower()] = hb
+	for hb in VrmHumanoidScript.ALL_HUMAN_BONES:
+		var low := hb.to_lower()
+		if not _vmc_bone_map_lower.has(low):
+			_vmc_bone_map_lower[low] = hb
 
 
 static func _vmc_bone_to_vrm(raw: String) -> String:
 	if raw.is_empty():
 		return raw
+	_ensure_vmc_bone_maps()
+	var low := raw.to_lower()
+	if _vmc_bone_map_lower.has(low):
+		return str(_vmc_bone_map_lower[low])
 	var n := raw.substr(0, 1).to_lower() + raw.substr(1)
-	# Unity HumanBodyBones の親指名 → VRM 1.0 の親指名
 	if n.ends_with("ThumbProximal"):
 		return n.trim_suffix("ThumbProximal") + "ThumbMetacarpal"
 	if n.ends_with("ThumbIntermediate"):
 		return n.trim_suffix("ThumbIntermediate") + "ThumbProximal"
 	return n
+
+
+static func _vrm_bone_to_vmc(vrm_name: String) -> String:
+	if vrm_name.is_empty():
+		return vrm_name
+	_ensure_vmc_bone_maps()
+	if _vrm_bone_to_vmc_map.has(vrm_name):
+		return str(_vrm_bone_to_vmc_map[vrm_name])
+	return vrm_name.substr(0, 1).to_upper() + vrm_name.substr(1)
+
+
+static func _vmc_expr_to_vrm(raw_key: String, vrm) -> String:
+	if vrm != null and vrm.expressions != null and vrm.expressions.expressions.has(raw_key):
+		return raw_key
+	var low := raw_key.to_lower()
+	if VMC_EXPR_LOWER.has(low):
+		return str(VMC_EXPR_LOWER[low])
+	if vrm != null and vrm.expressions != null:
+		for ek in vrm.expressions.expressions.keys():
+			if str(ek).to_lower() == low:
+				return str(ek)
+	return raw_key
+
+
+static func _vrm_expr_to_vmc(vrm_name: String, use_vrm0: bool) -> String:
+	if use_vrm0 and VRM0_EXPR_EXPORT_MAP.has(vrm_name):
+		return str(VRM0_EXPR_EXPORT_MAP[vrm_name])
+	return vrm_name
+
+
+func _get_local_ipv4_list() -> Array[String]:
+	var out: Array[String] = []
+	for addr in IP.get_local_addresses():
+		var s := str(addr)
+		if "." in s and not s.begins_with("127.") and not s.begins_with("169.254.") and not out.has(s):
+			out.append(s)
+	out.sort()
+	return out
+
+
+func _apply_vmc_bridge_config(force_recv: bool = true) -> Dictionary:
+	if bridge == null:
+		return {"ok": false, "error": "bridge unavailable"}
+	var ok := true
+	var errs: Array[String] = []
+	if force_recv or not vmc_recv_enabled or vmc_recv_bind_lan:
+		var r_json := bridge.reconfigure_osc_receiver(vmc_recv_enabled, vmc_recv_bind_lan, osc_port)
+		var r_parsed = JSON.parse_string(r_json)
+		if typeof(r_parsed) == TYPE_DICTIONARY and not bool(r_parsed.get("ok", true)):
+			ok = false
+			errs.append(str(r_parsed.get("error", "receiver bind failed")))
+	if force_recv or vmc_send_enabled:
+		var s_json := bridge.configure_vmc_sender(vmc_send_enabled, vmc_send_host, vmc_send_port)
+		var s_parsed = JSON.parse_string(s_json)
+		if typeof(s_parsed) == TYPE_DICTIONARY and not bool(s_parsed.get("ok", true)):
+			ok = false
+			errs.append(str(s_parsed.get("error", "sender bind failed")))
+	if not errs.is_empty():
+		_last_vmc_err = "; ".join(errs)
+	elif ok:
+		_last_vmc_err = ""
+	return {"ok": ok, "error": _last_vmc_err}
+
+
+func apply_vmc_settings(d: Dictionary) -> Dictionary:
+	var prev_rx_en := vmc_recv_enabled
+	var prev_rx_lan := vmc_recv_bind_lan
+	var prev_osc := osc_port
+	var prev_tx_en := vmc_send_enabled
+	var prev_tx_host := vmc_send_host
+	var prev_tx_port := vmc_send_port
+	var need_recv := false
+	var need_send := false
+	if d.has("recv_enabled"):
+		vmc_recv_enabled = bool(d["recv_enabled"])
+	if d.has("recv_bind_lan"):
+		vmc_recv_bind_lan = bool(d["recv_bind_lan"])
+	if d.has("recv_port") or d.has("osc_port"):
+		osc_port = clampi(int(d.get("recv_port", d.get("osc_port", osc_port))), 1024, 65535)
+	if vmc_recv_enabled != prev_rx_en or vmc_recv_bind_lan != prev_rx_lan or osc_port != prev_osc:
+		need_recv = true
+	if d.has("recv_apply_root"):
+		vmc_recv_apply_root = bool(d["recv_apply_root"])
+	if d.has("recv_apply_bones"):
+		vmc_recv_apply_bones = bool(d["recv_apply_bones"])
+	if d.has("recv_apply_expressions"):
+		vmc_recv_apply_expressions = bool(d["recv_apply_expressions"])
+	if d.has("recv_apply_camera"):
+		vmc_recv_apply_camera = bool(d["recv_apply_camera"])
+
+	if d.has("send_enabled"):
+		vmc_send_enabled = bool(d["send_enabled"])
+	if d.has("send_host"):
+		vmc_send_host = str(d["send_host"]).strip_edges()
+		if vmc_send_host == "":
+			vmc_send_host = "127.0.0.1"
+	if d.has("send_port"):
+		vmc_send_port = clampi(int(d["send_port"]), 1024, 65535)
+	if vmc_send_enabled != prev_tx_en or vmc_send_host != prev_tx_host or vmc_send_port != prev_tx_port:
+		need_send = true
+	if bool(d.get("force", false)):
+		need_recv = true
+		need_send = true
+	if d.has("send_fps"):
+		vmc_send_fps = clampi(int(d["send_fps"]), 10, 120)
+	if d.has("send_bones"):
+		vmc_send_bones = bool(d["send_bones"])
+	if d.has("send_expressions"):
+		vmc_send_expressions = bool(d["send_expressions"])
+	if d.has("send_camera"):
+		vmc_send_camera = bool(d["send_camera"])
+	if d.has("send_vrm0_names"):
+		vmc_send_vrm0_names = bool(d["send_vrm0_names"])
+
+	var loopback_hosts := {"127.0.0.1": true, "localhost": true, "::1": true, "0.0.0.0": true}
+	var host_l := vmc_send_host.to_lower()
+	var is_local := loopback_hosts.has(host_l) or _get_local_ipv4_list().has(host_l)
+	var guard_err := ""
+	if vmc_send_enabled and vmc_recv_enabled and vmc_send_port == osc_port and is_local:
+		vmc_send_enabled = false
+		need_send = true
+		guard_err = "送信先と受信ポートが同じ (:%d) ため自己ループ防止により送信をオフにしました" % osc_port
+
+	var res := {"ok": guard_err == "", "error": guard_err}
+	if bridge != null and (need_recv or need_send):
+		if need_recv:
+			var rr := bridge.reconfigure_osc_receiver(vmc_recv_enabled, vmc_recv_bind_lan, osc_port)
+			var rp = JSON.parse_string(rr)
+			if typeof(rp) == TYPE_DICTIONARY and not bool(rp.get("ok", true)):
+				res["ok"] = false
+				res["error"] = str(rp.get("error", "OSC receive failed"))
+		if need_send:
+			var sr := bridge.configure_vmc_sender(vmc_send_enabled, vmc_send_host, vmc_send_port)
+			var sp = JSON.parse_string(sr)
+			if typeof(sp) == TYPE_DICTIONARY and not bool(sp.get("ok", true)):
+				res["ok"] = false
+				res["error"] = str(sp.get("error", "OSC send failed"))
+	if not bool(res["ok"]):
+		_last_vmc_err = str(res["error"])
+	else:
+		_last_vmc_err = ""
+	if not vmc_recv_enabled:
+		_reset_vrm_tracking_state()
+	_emit_state_changed()
+	res["vmc"] = get_vmc_state()
+	return res
+
+
+func get_vmc_state() -> Dictionary:
+	var recv_st := {}
+	var send_st := {}
+	if bridge != null:
+		var rp = JSON.parse_string(bridge.get_vmc_receiver_status())
+		if typeof(rp) == TYPE_DICTIONARY:
+			recv_st = rp
+		var sp = JSON.parse_string(bridge.get_vmc_sender_status())
+		if typeof(sp) == TYPE_DICTIONARY:
+			send_st = sp
+	return {
+		"recv_enabled": vmc_recv_enabled,
+		"recv_bind_lan": vmc_recv_bind_lan,
+		"recv_port": osc_port,
+		"recv_apply_root": vmc_recv_apply_root,
+		"recv_apply_bones": vmc_recv_apply_bones,
+		"recv_apply_expressions": vmc_recv_apply_expressions,
+		"recv_apply_camera": vmc_recv_apply_camera,
+		"send_enabled": vmc_send_enabled,
+		"send_host": vmc_send_host,
+		"send_port": vmc_send_port,
+		"send_fps": vmc_send_fps,
+		"send_bones": vmc_send_bones,
+		"send_expressions": vmc_send_expressions,
+		"send_camera": vmc_send_camera,
+		"send_vrm0_names": vmc_send_vrm0_names,
+		"local_ips": _get_local_ipv4_list(),
+		"last_error": _last_vmc_err,
+		"receiver": recv_st,
+		"sender": send_st,
+	}
 
 
 static func _resolve_input_path(path: String) -> String:
@@ -1129,6 +1511,23 @@ func build_config_dict() -> Dictionary:
 		"idle": procedural_idle.get_params(),
 		"hotkeys": hotkey_manager.to_dict(),
 		"api": {"ws_port": ws_port, "osc_port": osc_port},
+		"vmc": {
+			"recv_enabled": vmc_recv_enabled,
+			"recv_bind_lan": vmc_recv_bind_lan,
+			"recv_port": osc_port,
+			"recv_apply_root": vmc_recv_apply_root,
+			"recv_apply_bones": vmc_recv_apply_bones,
+			"recv_apply_expressions": vmc_recv_apply_expressions,
+			"recv_apply_camera": vmc_recv_apply_camera,
+			"send_enabled": vmc_send_enabled,
+			"send_host": vmc_send_host,
+			"send_port": vmc_send_port,
+			"send_fps": vmc_send_fps,
+			"send_bones": vmc_send_bones,
+			"send_expressions": vmc_send_expressions,
+			"send_camera": vmc_send_camera,
+			"send_vrm0_names": vmc_send_vrm0_names,
+		},
 		"tracking": tracking.settings.duplicate(),
 		"lipsync": {"mode": lipsync_mode, "mouth_open": lip_sync.intensity, "emotion": lip_sync.emotion, "play_audio": lip_sync.play_audio, "volume": lip_sync.volume},
 	}
@@ -1165,6 +1564,7 @@ func get_full_state() -> Dictionary:
 		"vcam_status": capture_manager.get_vcam_status(),
 		"hotkeys": hotkey_manager.to_dict(),
 		"api": {"ws_port": ws_port, "osc_port": osc_port, "running": bridge.is_servers_running() if bridge != null else false},
+		"vmc": get_vmc_state(),
 		"tracking": tracking.to_dict(),
 	}
 
@@ -1221,6 +1621,8 @@ func _apply_config_dict(cfg: Dictionary) -> void:
 	if cfg.has("api") and typeof(cfg["api"]) == TYPE_DICTIONARY:
 		ws_port = int(cfg["api"].get("ws_port", ws_port))
 		osc_port = int(cfg["api"].get("osc_port", osc_port))
+	if cfg.has("vmc") and typeof(cfg["vmc"]) == TYPE_DICTIONARY:
+		apply_vmc_settings(cfg["vmc"])
 	if cfg.has("lipsync") and typeof(cfg["lipsync"]) == TYPE_DICTIONARY:
 		var ls: Dictionary = cfg["lipsync"]
 		if str(ls.get("mode", "")) in LIPSYNC_MODES:
@@ -1959,6 +2361,8 @@ func reset_all_settings() -> void:
 func start_tracking() -> Dictionary:
 	if not tracking.is_installed():
 		return tracking.start(osc_port)
+	if not vmc_recv_enabled:
+		apply_vmc_settings({"recv_enabled": true})
 	if bridge == null or not bridge.is_servers_running():
 		return {"ok": false, "error": "OSC/VMC 受信サーバーが動いていません"}
 	_clear_vmc_pose()
@@ -1985,11 +2389,14 @@ func _sync_vrm_tracking_flags() -> void:
 
 
 func _reset_vrm_tracking_state() -> void:
+	_last_vmc_blend_apply_msec = 0
 	if current_vrm == null:
 		return
 	current_vrm.vmc_bone_overrides.clear()
 	current_vrm.force_camera_gaze = false
 	current_vrm.has_vmc_hips_offset = false
+	current_vrm.vmc_root_rot = Quaternion.IDENTITY
+	current_vrm.has_vmc_root_rot = false
 	if current_vrm.arm_avoidance != null:
 		current_vrm.arm_avoidance.reset()
 	if current_vrm.spring_bone != null:
