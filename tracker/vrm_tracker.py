@@ -522,7 +522,11 @@ def main() -> int:
             if r_hand is not None:
                 for i, lms in enumerate(r_hand.hand_landmarks or []):
                     hands_draw.append(lms)
-                    hands_in.append((lms, r_hand.hand_world_landmarks[i]))
+                    hl = None
+                    if getattr(r_hand, "handedness", None) and i < len(r_hand.handedness) and r_hand.handedness[i]:
+                        cat = r_hand.handedness[i][0]
+                        hl = (str(getattr(cat, "category_name", "")), float(getattr(cat, "score", 0.0)))
+                    hands_in.append((lms, r_hand.hand_world_landmarks[i], hl))
             del frame, rgb, image
             det = {"face": face_in is not None, "hands": len(hands_in), "pose": pose_w is not None}
 

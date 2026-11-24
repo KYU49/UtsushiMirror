@@ -454,5 +454,77 @@ for i in range(60):
 ok &= check(f"交互微細振動 (±0.8°) を 1/4 以下に減衰 (std={float(np.std(jit_deg[20:])):.3f}°)",
             float(np.std(jit_deg[20:])) < 0.20)
 
+# ---- 手主導ハイブリッド腕IK・handedness割り当て・顔近接安定化
+def pose_with_face():
+    im = img_pose(0.5)
+    im[0] = L(x=0.50, y=0.25, z=0.0, visibility=1.0)
+    im[15] = L(x=0.60, y=0.675, z=0.0, visibility=1.0)
+    im[13] = L(x=0.60, y=0.55, z=0.0, visibility=1.0)
+    return im
+
+# 1) Pose腕ロスト直後でも手が動けば手主導で腕が即座に追従する
+sv_hd = Solver(SolverConfig(mirror=False, smooth=0.0, stabilize=0.0))
+for i in range(4):
+    h0 = [L(x=0.60, y=0.675, z=0.0) for _ in range(21)]
+    sv_hd.solve(pose_world=body(True), pose_image=pose_with_face(), hands=[(h0, flat_hand(np.array([0, 0, 0, 1.0])))], t=i / 30.0)
+tip_low = arm_tip(sv_hd.solve(pose_world=body(True), pose_image=pose_with_face(),
+                              hands=[([L(x=0.60, y=0.675, z=0.0) for _ in range(21)], flat_hand(np.array([0, 0, 0, 1.0])))], t=4 / 30.0))
+im_lost = pose_with_face()
+for k in (13, 15):
+    im_lost[k] = L(x=0.60, y=0.675, z=0.0, visibility=0.05)
+bw_lost = body_no_left_arm()
+for i in range(5, 8):
+    y_up = 0.675 - 0.14 * (i - 4)  # 上へ手を動かす
+    h_up = [L(x=0.66, y=y_up, z=0.0) for _ in range(21)]
+    r_hd = sv_hd.solve(pose_world=bw_lost, pose_image=im_lost, hands=[(h_up, flat_hand(np.array([0, 0, 0, 1.0])))], t=i / 30.0)
+tip_hi = arm_tip(r_hd)
+ok &= check("Pose腕欠損中に手が動くと即座に腕が追従する", tip_hi[1] > tip_low[1] + 0.15)
+
+# 2) 顔付近に手を上げても肘ポールが180度反転せず安定する
+sv_fc = Solver(SolverConfig(mirror=False, smooth=0.5, stabilize=0.3))
+elbows = []
+rng_fc = np.random.default_rng(11)
+for i in range(30):
+    im_fc = pose_with_face()
+    for k in (13, 15):
+        im_fc[k] = L(x=0.50, y=0.28, z=0.0, visibility=0.2)
+    hx = 0.51 + float(rng_fc.normal(0.0, 0.008))
+    hy = 0.27 + float(rng_fc.normal(0.0, 0.008))
+    h_fc = [L(x=hx, y=hy, z=0.0) for _ in range(21)]
+    h_fc[9] = L(x=hx, y=hy - 0.04, z=0.0)
+    rf = sv_fc.solve(pose_world=body_no_left_arm(), pose_image=im_fc,
+                     hands=[(h_fc, flat_hand(np.array([0, 0, 0, 1.0])), ("Right", 0.95))], t=i / 30.0)
+    up_f = q_mul(q_mul(rf.bones["chest"], rf.bones["spine"]), q_mul(rf.bones["leftShoulder"], rf.bones["leftUpperArm"]))
+    elbows.append(q_rot(up_f, np.array([1.0, 0.0, 0.0])))
+el_steps = [math.degrees(angle_between(elbows[i], elbows[i - 1])) for i in range(5, len(elbows))]
+ok &= check(f"顔付近で手を動かしても肘ポールが急反転しない (最大 {max(el_steps):.1f}°/F)", max(el_steps) < 12.0)
+
+# 3) 正中線越えの左手も handedness により右腕と取り違えない
+sv_hn = Solver(SolverConfig(mirror=False, smooth=0.0, stabilize=0.0))
+im_hn = pose_with_face()
+for k in (13, 15):
+    im_hn[k] = L(x=0.5, y=0.35, z=0.0, visibility=0.1)
+for i, hx in enumerate((0.62, 0.55, 0.44)):
+    h_cross = [L(x=hx, y=0.36, z=0.0) for _ in range(21)]
+    # 非反転入力で本人の物理左手 = MediaPipe handedness "Right"
+    r_hn = sv_hn.solve(pose_world=body_no_left_arm(), pose_image=im_hn,
+                       hands=[(h_cross, flat_hand(np.array([0, 0, 0, 1.0])), ("Right", 0.95))], t=i / 30.0)
+ok &= check("正中線を越えても handedness で左手として維持される", "leftHand" in r_hn.bones and "rightHand" not in r_hn.bones)
+
+# 4) 顔付近の 1 フレーム外れ値ジャンプは棄却される
+sv_out = Solver(SolverConfig(mirror=False, smooth=0.0, stabilize=0.0))
+im_o = pose_with_face()
+for k in (13, 15):
+    im_o[k] = L(x=0.52, y=0.28, z=0.0, visibility=0.1)
+for i in range(6):
+    r_prev = sv_out.solve(pose_world=body_no_left_arm(), pose_image=im_o,
+                          hands=[([L(x=0.52, y=0.28, z=0.0) for _ in range(21)], flat_hand(np.array([0, 0, 0, 1.0])), ("Right", 0.95))], t=i / 30.0)
+tip_before_spike = arm_tip(r_prev)
+r_spike = sv_out.solve(pose_world=body_no_left_arm(), pose_image=im_o,
+                       hands=[([L(x=0.80, y=0.22, z=0.0) for _ in range(21)], flat_hand(np.array([0, 0, 0, 1.0])), ("Right", 0.95))], t=6 / 30.0)
+tip_on_spike = arm_tip(r_spike)
+spike_deg = math.degrees(angle_between(tip_before_spike, tip_on_spike))
+ok &= check(f"顔付近の1フレーム外れ値テレポートを棄却 (跳ね={spike_deg:.2f}°)", spike_deg < 3.0)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

@@ -27,6 +27,7 @@ from .mathq import (IDENT, angle_between, frame, norm, q_axis_angle, q_from_matr
 
 # MediaPipe Pose のランドマーク番号 (左右は「本人から見た」左右)
 P_NOSE = 0
+P_L_EAR, P_R_EAR = 7, 8
 P_L_SH, P_R_SH = 11, 12
 P_L_EL, P_R_EL = 13, 14
 P_L_WR, P_R_WR = 15, 16
@@ -334,6 +335,14 @@ class Solver:
         self._leg_ok: dict[str, bool] = {}       # 前のフレームで足首まで使えたか (しきい値のヒステリシス)
         self._pose_arm: dict[str, tuple] = {}    # 側 → (上腕, 前腕, 時刻): 最後に信用できた姿勢推定の腕
         self._est_w: dict[str, float] = {}       # 側 → 手から推定した腕を混ぜる割合 (0 = 姿勢推定, 1 = 推定)
+        self._pose_arm_vec: dict[str, tuple] = {}
+        self._good_pose_vec: dict[str, tuple] = {}
+        self._last_hand2d: dict[str, tuple] = {}
+        self._hand_pos_f: dict[str, _Euro] = {}
+        self._hand_jump: dict[str, int] = {}
+        self._pole_f: dict[str, np.ndarray] = {}
+        self._palm_base: dict[str, float] = {}
+        self._pose_trust: dict[str, float] = {}
 
     # ------------------------------------------------------------------ キャリブレーション
     def start_capture(self) -> None:
@@ -375,6 +384,7 @@ class Solver:
         self._sh_base = None
         self._hip_base = None
         self._hip_base_mirror = None
+        self._palm_base.clear()
 
     def _cal_q(self, key: str):
         q = getattr(self.calib, key)
@@ -488,14 +498,17 @@ class Solver:
         self._solve_shoulders(res)
 
         # 腕
+        self._pose_arm_vec = {}
         for side, s_i, e_i, w_i, rest_x in (("left", ls, le, lw, 1.0), ("right", rs, re, rw, -1.0)):
             thr = cfg.min_visibility * (0.55 if self._arm_ok.get(side) else 0.8)
             self._arm_ok[side] = False
-            if min(self._vis(w, e_i), self._vis(w, w_i)) < thr:
+            vis_arm = min(self._vis(w, e_i), self._vis(w, w_i))
+            if vis_arm < thr:
                 continue
             if self._img is not None and not self._in_frame(self._img[w_i], 0.02):
                 continue  # 画面の外の手首は推測の位置なので、腕を動かさない (反対の手の誤動作の元)
             self._arm_ok[side] = True
+            self._pose_arm_vec[side] = (p[e_i] - p[s_i], p[w_i] - p[s_i], vis_arm)
             rest = np.array([rest_x, 0.0, 0.0])
             parent = q_mul(chest_world, self._sh_q.get(side, IDENT))  # 肩の先
             up_world = q_mul(q_from_to(q_rot(parent, rest), p[e_i] - p[s_i]), parent)
@@ -574,9 +587,19 @@ class Solver:
             self._sh_q[side] = q
             res.bones[f"{side}Shoulder"] = q
 
-    def _arm_from_hand(self, side: str, hand2d: np.ndarray, sh2d: np.ndarray, sw: float) -> tuple:
-        """腕が取れていないとき、画像上の手首の位置 (肩からの向き・距離) から腕の形を推定する。
-        奥行きは分からないので、肩から腕の長さの 7 割ほど離れた所にあるとして、肘は下・やや後ろへ曲げる。"""
+    def _arm_from_hand(
+        self,
+        side: str,
+        hand2d: np.ndarray,
+        sh2d: np.ndarray,
+        sw: float,
+        pose_trust: float = 0.0,
+        pose_vec: tuple | None = None,
+        palm_scale: float = 1.0,
+        face_near: float = 0.0,
+    ) -> tuple:
+        """手主導ハイブリッド 2-Bone IK: 手首位置から上腕・前腕を連続的に求め、
+        信頼できる Pose 肘・奥行きと高度適応型ポールベクトルを滑らかに融合する。"""
         sign = 1.0 if side == "left" else -1.0
         k = SHOULDER_WIDTH_M / max(0.03, sw)
         dx = float(hand2d[0] - sh2d[0]) * k
@@ -584,19 +607,59 @@ class Solver:
         lu, ll = 0.28, 0.26
         reach = (lu + ll) * 0.98
         planar = math.hypot(dx, dy)
-        if planar > reach:
-            dx, dy, planar = dx * reach / planar, dy * reach / planar, reach
-        dz = math.sqrt(max(0.0, (reach * 0.7) ** 2 - planar ** 2))
-        t = np.array([dx, dy, dz])
+        if planar > reach * 0.99:
+            s_cl = (reach * 0.99) / planar
+            dx, dy, planar = dx * s_cl, dy * s_cl, reach * 0.99
+        base_r = reach * 0.72
+        dz_geo = math.sqrt(max(0.02 * 0.02, base_r * base_r - planar * planar * 0.65))
+        dz_est = max(0.02, dz_geo + 0.14 * (palm_scale - 1.0))
+        t = np.array([dx, dy, dz_est], dtype=float)
         if self._inv0 is not None:
             t = q_rot(self._inv0, t)
+        if pose_vec is not None and pose_trust > 0.01:
+            p_wr = np.asarray(pose_vec[1], dtype=float)
+            z_pose = float(p_wr[2]) if abs(float(p_wr[2])) > 0.02 else float(t[2])
+            t_p = np.array([t[0], t[1], z_pose], dtype=float)
+            len_p = max(0.08, min(reach, float(np.linalg.norm(p_wr))))
+            if float(np.linalg.norm(t_p)) > 1e-6:
+                t_p = norm(t_p) * len_p
+                t = t * (1.0 - pose_trust) + t_p * pose_trust
+
         dist = max(0.06, min(reach, float(np.linalg.norm(t))))
         n = norm(t)
-        pole = np.array([sign * 0.2, -1.0, -0.4])
-        b = pole - n * float(np.dot(pole, n))
-        if float(np.linalg.norm(b)) < 1e-6:
-            b = np.array([0.0, 0.0, -1.0]) - n * float(n[2] * -1.0)
+
+        # 高さと顔近接度に応じた特異点フリーの肘ポールベクトル (手を顔前に上げた際の180度反転を防ぐ)
+        elev = _clamp01((float(t[1]) + 0.10) / 0.45)
+        cross = _clamp01((-sign * float(t[0])) / 0.25)
+        pole_low = np.array([sign * 0.25, -1.0, -0.35], dtype=float)
+        pole_high = np.array([sign * (0.55 + 0.25 * cross), -0.65, 0.30], dtype=float)
+        pole_target = norm(pole_low * (1.0 - elev) + pole_high * elev)
+
+        if pose_vec is not None and pose_trust > 0.01:
+            p_el = np.asarray(pose_vec[0], dtype=float)
+            el_perp = p_el - n * float(np.dot(p_el, n))
+            if float(np.linalg.norm(el_perp)) > 0.04:
+                swivel_w = pose_trust * 0.7
+                pole_target = norm(pole_target * (1.0 - swivel_w) + norm(el_perp) * swivel_w)
+
+        b = pole_target - n * float(np.dot(pole_target, n))
+        if float(np.linalg.norm(b)) < 0.08:
+            fb = np.array([sign, 0.0, -0.3], dtype=float)
+            b = fb - n * float(np.dot(fb, n))
+            if float(np.linalg.norm(b)) < 1e-6:
+                b = np.array([0.0, -1.0, 0.0]) - n * float(-n[1])
         b = norm(b)
+
+        prev_b = self._pole_f.get(side)
+        if prev_b is not None:
+            rate = 8.0 if face_near > 0.2 else 16.0
+            a_p = 1.0 - math.exp(-self._dt * rate) if self.cfg.smooth > 0.0 else 1.0
+            b_mix = prev_b * (1.0 - a_p) + b * a_p
+            b_ortho = b_mix - n * float(np.dot(b_mix, n))
+            if float(np.linalg.norm(b_ortho)) > 1e-6:
+                b = norm(b_ortho)
+        self._pole_f[side] = b
+
         cos_a = max(-1.0, min(1.0, (lu * lu + dist * dist - ll * ll) / (2.0 * lu * dist)))
         sin_a = math.sqrt(max(0.0, 1.0 - cos_a * cos_a))
         elbow = n * cos_a * lu + b * sin_a * lu
@@ -735,92 +798,202 @@ class Solver:
 
     # ------------------------------------------------------------------ 手
     def _solve_hands(self, hands: list, pose_image, res: SolveResult) -> None:
-        """見えている手を左右の腕に割り当て、手の付く腕を決める。
-        手が見えている間は、手首の位置を正しいものとして腕を安定させる:
-          - 姿勢推定の手首が手の手首の近くにある → 姿勢推定の腕を使う
-          - 姿勢推定の腕が無い・手首が手から離れている (ちらつき・誤検出) → 直前の信用できた腕を少し保ち、
-            その後は手の位置から推定した腕へゆっくり切り替える。戻るときもゆっくり戻す。"""
+        """見えている手を左右の腕に割り当て、手主導ハイブリッド腕 IK で腕と手を安定させる。"""
         cfg = self.cfg
         lw, rw = self._side(P_L_WR, P_R_WR)
         wrist2d = {"left": self._pi(pose_image[lw]), "right": self._pi(pose_image[rw])}
         ls, rs = self._side(P_L_SH, P_R_SH)
         sw = float(np.linalg.norm(self._pi(pose_image[ls]) - self._pi(pose_image[rs])))
         max_d = max(0.08, min(0.25, sw * 0.7))
+        sh2d = {"left": self._pa(pose_image[ls]), "right": self._pa(pose_image[rs])}
+        swa = max(0.03, float(np.linalg.norm(sh2d["left"] - sh2d["right"])))
+        sh_mid_a = (sh2d["left"] + sh2d["right"]) * 0.5
+        face_c = sh_mid_a + np.array([0.0, -swa * 0.72])
+        if len(pose_image) > P_NOSE and self._vis(pose_image, P_NOSE) >= cfg.min_visibility:
+            nose_a = self._pa(pose_image[P_NOSE])
+            if nose_a[1] < sh_mid_a[1]:
+                face_c = nose_a
+        face_r = max(0.06, swa * 0.55)
+
         e = cfg.hand_edge
         seen2d: list = []
         good: list = []
-        for img_lms, world_lms in hands:
+        for item in hands:
+            img_lms, world_lms = item[0], item[1]
+            hand_hl = item[2] if len(item) >= 3 else None
             h2d = self._pi(img_lms[0])
             if e > 0 and not (e <= h2d[0] <= 1 - e and e <= h2d[1] <= 1 - e):
                 continue  # 画面の端の手は形が崩れやすい
             if any(float(np.linalg.norm(h2d - o)) < 0.05 for o in seen2d):
                 continue  # 同じ手を 2 回検出したもの
             seen2d.append(h2d)
-            good.append((img_lms, world_lms, h2d))
+            h2a = self._pa(img_lms[0])
+            f_near = 1.0 - _ramp(float(np.linalg.norm(h2a - face_c)), face_r * 0.5, face_r * 1.5)
+            good.append((img_lms, world_lms, h2d, h2a, hand_hl, f_near))
 
-        # 1) 姿勢推定の手首が近い腕に割り当てる (信用できる腕)
-        assigned: dict = {}  # 側 → (画像の手, ワールドの手, 姿勢推定の腕を信用できるか)
-        leftover: list = []
-        for img_lms, world_lms, h2d in good:
-            cands = [s for s in ("left", "right") if f"__{s}LowerArmWorld" in res.bones and s not in assigned]
-            d = {s: float(np.linalg.norm(wrist2d[s] - h2d)) for s in cands}
-            side = min(cands, key=lambda s: d[s]) if cands else None
-            if side is not None and d[side] <= max_d:
-                assigned[side] = (img_lms, world_lms, True)
-            else:
-                leftover.append((img_lms, world_lms))
-
-        # 2) 残った手: 手から腕を推定できるなら、肩に近い側へ (その側の姿勢推定の腕は信用しない)
         can_est = (cfg.arm_from_hand and self._chest_world is not None
                    and min(self._vis(pose_image, ls), self._vis(pose_image, rs)) >= cfg.min_visibility)
-        sh2d = {"left": self._pa(pose_image[ls]), "right": self._pa(pose_image[rs])}
-        swa = float(np.linalg.norm(sh2d["left"] - sh2d["right"]))
-        if can_est:
-            for img_lms, world_lms in leftover:
-                free = [s for s in ("left", "right") if s not in assigned]
-                if not free:
-                    break
-                h2a = self._pa(img_lms[0])
-                side = min(free, key=lambda s: float(np.linalg.norm(sh2d[s] - h2a)))
-                assigned[side] = (img_lms, world_lms, False)
 
-        # 3) 腕を決めて手を付ける
-        rate = self._dt / 0.35  # 姿勢推定 ⇔ 手からの推定 の切り替えにかける時間
+        assigned: dict = {}  # 側 → (img_lms, world_lms, h2d, h2a, f_near)
+        if not can_est:
+            # 推定オフ時やテスト時 (胸ワールド回転なし): 姿勢推定の手首が近い腕にのみ割り当てる
+            used: set = set()
+            for idx, (img_lms, world_lms, h2d, h2a, _hl, f_near) in enumerate(good):
+                cands = [s for s in ("left", "right") if f"__{s}LowerArmWorld" in res.bones and s not in assigned]
+                if not cands:
+                    continue
+                d = {s: float(np.linalg.norm(wrist2d[s] - h2d)) for s in cands}
+                side = min(cands, key=lambda s: d[s])
+                if d[side] <= max_d:
+                    assigned[side] = (img_lms, world_lms, h2d, h2a, f_near)
+                    used.add(idx)
+        elif good:
+            def assign_cost(entry, side: str) -> float:
+                _il, _wl, h2d, h2a, hand_hl, f_near = entry
+                cost = 0.0
+                prev_e = self._last_hand2d.get(side)
+                if prev_e is not None and (self._t_now - prev_e[1]) < 0.5:
+                    dt_h = max(0.0, self._t_now - prev_e[1])
+                    cost += min(1.4, 1.4 * (1.0 - dt_h / 0.5) * float(np.linalg.norm(h2a - prev_e[0])) / swa)
+                else:
+                    cost += 0.65
+                if hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.55:
+                    label = str(hand_hl[0])
+                    if label in ("Left", "Right"):
+                        # 非反転入力前提: MediaPipe の "Left" = 本人の物理右手
+                        exp_side = ("left" if label == "Left" else "right") if cfg.mirror else ("right" if label == "Left" else "left")
+                        if exp_side != side:
+                            cost += 0.55 * float(hand_hl[1])
+                if f"__{side}LowerArmWorld" in res.bones:
+                    w_pw = 1.0 - 0.65 * f_near
+                    d_pw = float(np.linalg.norm(wrist2d[side] - h2d))
+                    cost += w_pw * 0.8 * min(1.5, d_pw / max(0.05, max_d))
+                cost += 0.25 * float(np.linalg.norm(sh2d[side] - h2a)) / swa
+                return cost
+
+            if len(good) == 1:
+                c_l = assign_cost(good[0], "left")
+                c_r = assign_cost(good[0], "right")
+                best_s = "left" if c_l <= c_r else "right"
+                il, wl, h2d, h2a, _hl, fn = good[0]
+                assigned[best_s] = (il, wl, h2d, h2a, fn)
+            else:
+                pool = good[:4]
+                best_pair = None
+                best_c = float("inf")
+                for i in range(len(pool)):
+                    for j in range(len(pool)):
+                        if i == j:
+                            continue
+                        c = assign_cost(pool[i], "left") + assign_cost(pool[j], "right")
+                        if c < best_c:
+                            best_c = c
+                            best_pair = (i, j)
+                if best_pair is not None:
+                    il0, wl0, h2d0, h2a0, _hl0, fn0 = pool[best_pair[0]]
+                    il1, wl1, h2d1, h2a1, _hl1, fn1 = pool[best_pair[1]]
+                    assigned["left"] = (il0, wl0, h2d0, h2a0, fn0)
+                    assigned["right"] = (il1, wl1, h2d1, h2a1, fn1)
+
+        # 腕を決めて手を付ける
+        trust_rate = self._dt / 0.45
         for side in ("left", "right"):
             if side not in assigned:
-                if f"{side}UpperArm" in res.bones:
-                    self._pose_arm[side] = (res.bones[f"{side}UpperArm"], res.bones[f"{side}LowerArm"], self._t_now)
+                if f"{side}UpperArm" in res.bones and side in self._pose_arm_vec:
+                    self._good_pose_vec[side] = (self._pose_arm_vec[side][0], self._pose_arm_vec[side][1], self._t_now)
                 self._est_w[side] = 0.0
+                self._pose_trust[side] = max(0.0, self._pose_trust.get(side, 0.0) - trust_rate)
                 continue
-            img_lms, world_lms, trusted = assigned[side]
-            if trusted and f"{side}UpperArm" not in res.bones:
-                self._solve_one_hand(side, world_lms, res)  # 腕の回転は無く、前腕の向きだけある (テスト・特殊な入力)
+
+            img_lms, world_lms, h2d, h2a, f_near = assigned[side]
+            pose_ok = f"__{side}LowerArmWorld" in res.bones and side in self._pose_arm_vec
+            d_pw = float(np.linalg.norm(wrist2d[side] - h2d)) if pose_ok else max_d * 2.0
+            if not can_est:
+                if pose_ok and f"{side}UpperArm" not in res.bones:
+                    self._solve_one_hand(side, world_lms, res)
+                    continue
+                if pose_ok and d_pw <= max_d:
+                    self._pose_arm[side] = (res.bones[f"{side}UpperArm"], res.bones[f"{side}LowerArm"], self._t_now)
+                elif side in self._pose_arm and self._t_now - self._pose_arm[side][2] < 0.6:
+                    up, lo = self._pose_arm[side][:2]
+                    res.bones[f"{side}UpperArm"] = up
+                    res.bones[f"{side}LowerArm"] = lo
+                    parent = q_mul(self._chest_world, self._sh_q.get(side, IDENT)) if self._chest_world is not None else IDENT
+                    res.bones[f"__{side}LowerArmWorld"] = q_mul(q_mul(parent, up), lo)
+                if f"__{side}LowerArmWorld" in res.bones:
+                    self._solve_one_hand(side, world_lms, res)
                 continue
-            src = None
-            if trusted:
-                src = (res.bones[f"{side}UpperArm"], res.bones[f"{side}LowerArm"])
-                self._pose_arm[side] = (src[0], src[1], self._t_now)
-            elif side in self._pose_arm and self._t_now - self._pose_arm[side][2] < 0.6:
-                src = self._pose_arm[side][:2]  # 少しの間は、最後に信用できた腕を保つ
-            target = 0.0 if trusted else 1.0
-            w = self._est_w.get(side, target)
-            if src is None:
-                w = 1.0
+
+            # 1) 顔付近などで起きやすい 1 フレーム外れ値ジャンプの棄却
+            jump_lim = max(0.08, swa * (0.45 if f_near > 0.3 else 0.95)) * max(1.0, self._dt / (1.0 / 30.0))
+            prev_e = self._last_hand2d.get(side)
+            if prev_e is not None and (self._t_now - prev_e[1]) < 0.25:
+                step = float(np.linalg.norm(h2a - prev_e[0]))
+                if step > jump_lim and self._hand_jump.get(side, 0) < 2:
+                    self._hand_jump[side] = self._hand_jump.get(side, 0) + 1
+                    h2a = prev_e[0].copy()
+                else:
+                    self._hand_jump[side] = 0
             else:
-                w = min(target, w + rate) if w < target else max(target, w - rate)
-            est = None
-            if can_est and w > 0.0:
-                est = self._arm_from_hand(side, self._pa(img_lms[0]), sh2d[side], swa)
-            if est is None:
-                if src is None:
-                    continue  # 腕が決まらないので手も付けない
-                w = 0.0
-                up, lo = src
-            elif src is None:
-                up, lo = est
+                self._hand_jump[side] = 0
+            self._last_hand2d[side] = (h2a.copy(), self._t_now)
+
+            # 2) 見かけの手の大きさ比による奥行き補助 + IK 前座標フィルタ
+            palm_px = float(np.linalg.norm(self._pa(img_lms[9]) - self._pa(img_lms[0])))
+            if palm_px > 1e-4:
+                palm_rel = palm_px / swa
+                base_p = self._palm_base.get(side)
+                if base_p is None:
+                    base_p = max(0.14, min(0.30, palm_rel))
+                    self._palm_base[side] = base_p
+                palm_scale = max(0.6, min(1.8, palm_rel / base_p))
             else:
-                up, lo = q_slerp(src[0], est[0], w), q_slerp(src[1], est[1], w)
-            self._est_w[side] = w
+                palm_scale = 1.0
+
+            hp = np.array([float(h2a[0]), float(h2a[1]), float(palm_scale)], dtype=float)
+            f_hp = self._hand_pos_f.setdefault(side, _Euro())
+            if cfg.smooth > 0.0:
+                s_sm = _clamp01(cfg.smooth)
+                mc_h = 0.5 * 10 ** (1.3 * (1.0 - s_sm)) * (1.8 - 1.1 * f_near)
+                beta_h = 0.1 + 2.4 * _clamp01(cfg.responsiveness)
+                hp = f_hp.value(hp, self._dt, mc_h, beta_h)
+            else:
+                f_hp.prev = hp
+            h2a_f = hp[:2]
+            palm_scale_f = float(hp[2])
+
+            # 3) Pose 腕の肘・奥行きへの連続ブレンド重み (瞬間的な欠損・飛びは保ちつつ緩やかに切替)
+            agree = pose_ok and (d_pw <= max_d)
+            good_v = self._good_pose_vec.get(side)
+            if agree:
+                p_el, p_wr, raw_vis = self._pose_arm_vec[side]
+                self._good_pose_vec[side] = (p_el, p_wr, self._t_now)
+                good_v = self._good_pose_vec[side]
+                t_target = _clamp01((raw_vis - 0.35) / 0.45) * (1.0 - 0.6 * f_near) * _clamp01(1.15 - d_pw / max(0.05, max_d))
+            elif good_v is not None and (self._t_now - good_v[2]) < 0.12:
+                # 数フレーム程度の Pose ちらつきでは補助重みを揺らさない (手首 XY は常に手に追従)
+                t_target = self._pose_trust.get(side, 0.0)
+            else:
+                t_target = 0.0
+
+            if side not in self._pose_trust:
+                pt = t_target
+            else:
+                cur_pt = self._pose_trust[side]
+                pt = min(t_target, cur_pt + trust_rate) if cur_pt < t_target else max(t_target, cur_pt - trust_rate)
+            self._pose_trust[side] = pt
+
+            pose_vec = None
+            if pt > 0.01 and good_v is not None and (self._t_now - good_v[2]) < 0.6:
+                pose_vec = (good_v[0], good_v[1])
+            else:
+                pt = 0.0
+
+            up, lo = self._arm_from_hand(
+                side, h2a_f, sh2d[side], swa,
+                pose_trust=pt, pose_vec=pose_vec, palm_scale=palm_scale_f, face_near=f_near,
+            )
+            self._est_w[side] = 1.0 - pt
             parent = q_mul(self._chest_world, self._sh_q.get(side, IDENT)) if self._chest_world is not None else IDENT
             res.bones[f"{side}UpperArm"] = up
             res.bones[f"{side}LowerArm"] = lo
