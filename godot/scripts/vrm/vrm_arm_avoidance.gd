@@ -2,11 +2,15 @@ class_name VrmArmAvoidance
 extends RefCounted
 
 ## トラッキング中の腕・手・指先が体幹・胸・頭(+横髪)へめり込むのを 2-Bone IK で回避し、
-## 手のひら〜指先・前腕の SpringBone 外部コライダーを生成する。
+## 二の腕の胸・体幹への弱い貫通抑制と手のひら〜指先・前腕の SpringBone 外部コライダー生成を行う。
 
 const VrmSpringBoneScript := preload("res://scripts/vrm/vrm_springbone.gd")
 
 var _smooth_push: Dictionary = {
+	"left": Vector3.ZERO,
+	"right": Vector3.ZERO,
+}
+var _smooth_ua_push: Dictionary = {
 	"left": Vector3.ZERO,
 	"right": Vector3.ZERO,
 }
@@ -15,6 +19,8 @@ var _smooth_push: Dictionary = {
 func reset() -> void:
 	_smooth_push["left"] = Vector3.ZERO
 	_smooth_push["right"] = Vector3.ZERO
+	_smooth_ua_push["left"] = Vector3.ZERO
+	_smooth_ua_push["right"] = Vector3.ZERO
 
 
 func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, dt: float) -> void:
@@ -100,7 +106,13 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 				"kind": body_bone_kinds[b_i],
 			})
 
+	var torso_obstacles: Array = []
+	for obs in obstacles:
+		if str(obs.get("kind", "")) == "torso":
+			torso_obstacles.append(obs)
+
 	var hand_pad: float = clampf(sh_w * 0.14, 0.035, 0.075)
+	var ua_pad: float = clampf(sh_w * 0.06, 0.015, 0.032)
 	var alpha: float = (1.0 - exp(-dt * 18.0)) if dt > 0.0 else 1.0
 
 	for side in ["left", "right"]:
@@ -112,6 +124,7 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 			continue
 		if not (composed_bones.has(up_name) or composed_bones.has(lo_name)):
 			_smooth_push[side] = Vector3.ZERO
+			_smooth_ua_push[side] = Vector3.ZERO
 			continue
 
 		var sign_v: float = 1.0 if side == "left" else -1.0
@@ -146,12 +159,25 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 		var push: Vector3 = prev_push.lerp(raw_push, alpha)
 		_smooth_push[side] = push
 
+		# 二の腕 (上腕中間〜肘) の胸・体幹への弱い貫通抑制 (手首より弱く、自然な垂れ腕では干渉しない)
+		var ua_mid: Vector3 = sh_pos.lerp(el_pos, 0.65)
+		var d_ua_mid: Vector3 = _resolve_upper_arm_obstacles(ua_mid, ua_pad, torso_obstacles, torso_fwd, torso_left, sign_v)
+		var el_from_mid: Vector3 = d_ua_mid * 0.95
+		var d_ua_el: Vector3 = _resolve_upper_arm_obstacles(el_pos + el_from_mid, ua_pad, torso_obstacles, torso_fwd, torso_left, sign_v)
+		var raw_ua_push: Vector3 = el_from_mid + d_ua_el * 0.55
+		var max_ua_push: float = lu * 0.45
+		if raw_ua_push.length() > max_ua_push:
+			raw_ua_push = raw_ua_push.normalized() * max_ua_push
+		var prev_ua_push: Vector3 = _smooth_ua_push.get(side, Vector3.ZERO)
+		var ua_push: Vector3 = prev_ua_push.lerp(raw_ua_push, alpha)
+		_smooth_ua_push[side] = ua_push
+
 		var cur_tip_vec: Vector3 = palm_tip - wr_pos
 		var probe_wr: Vector3 = wr_pos + push
 		var pre_tip_clear := Vector3.ZERO
 		if cur_tip_vec.length_squared() > 1e-5:
 			pre_tip_clear = _resolve_obstacles(probe_wr + cur_tip_vec, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
-		if push.length_squared() < 1e-8 and pre_tip_clear.length_squared() < 1e-8:
+		if push.length_squared() < 1e-8 and ua_push.length_squared() < 1e-8 and pre_tip_clear.length_squared() < 1e-8:
 			continue
 
 		var q_parent: Quaternion = q_chest
@@ -164,20 +190,34 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 		var has_hand_comp: bool = composed_bones.has(hd_name)
 		var q_hd_world: Quaternion = (q_lo_world * (composed_bones.get(hd_name, Quaternion.IDENTITY) as Quaternion)).normalized()
 
+		var el_shifted: Vector3 = el_pos
+		var actual_el_delta := Vector3.ZERO
+		if ua_push.length_squared() >= 1e-8:
+			var desired_u: Vector3 = (el_pos + ua_push) - sh_pos
+			if desired_u.length_squared() > 1e-8:
+				el_shifted = sh_pos + desired_u.normalized() * lu
+				actual_el_delta = el_shifted - el_pos
+
 		var new_up_world: Quaternion = q_up_world
 		var new_lo_world: Quaternion = q_lo_world
 		var new_wr: Vector3 = wr_pos
-		if push.length_squared() >= 1e-8:
+		if push.length_squared() >= 1e-8 or actual_el_delta.length_squared() >= 1e-8:
 			var max_reach: float = (lu + ll) * 0.995
 			var min_reach: float = maxf(0.05, absf(lu - ll) + 0.01)
-			var rel_target: Vector3 = (wr_pos + push) - sh_pos
+			var wr_shift: Vector3 = push
+			if actual_el_delta.length_squared() >= 1e-8:
+				var orig_dist: float = wr_pos.distance_to(sh_pos)
+				var straight_t: float = clampf((orig_dist / (lu + ll) - 0.65) / 0.30, 0.0, 1.0)
+				var carry: float = 0.25 if push.length_squared() >= 1e-6 else lerpf(0.45, 0.85, straight_t)
+				wr_shift += actual_el_delta * carry
+			var rel_target: Vector3 = (wr_pos + wr_shift) - sh_pos
 			var dist: float = clampf(rel_target.length(), min_reach, max_reach)
 			var cur_u: Vector3 = (el_pos - sh_pos).normalized()
 			var cur_l: Vector3 = (wr_pos - el_pos).normalized()
 			var n: Vector3 = rel_target.normalized() if rel_target.length_squared() > 1e-8 else cur_u
 
 			# 元の肘の向き (上腕方向) を極ベクトルにして平面の不連続反転を防ぐ
-			var cur_arm: Vector3 = el_pos - sh_pos
+			var cur_arm: Vector3 = el_shifted - sh_pos
 			var b: Vector3 = cur_arm - n * cur_arm.dot(n)
 			if b.length_squared() < 1e-6:
 				var fb := Vector3(sign_v * 0.3, -1.0, -0.3)
@@ -309,6 +349,34 @@ static func _resolve_obstacles(pt: Vector3, pad: float, obstacles: Array, torso_
 					var b_q := d_vec.dot(u)
 					var c_q := dist_sq - r_safe * r_safe
 					var step_t := -b_q + sqrt(maxf(0.0, b_q * b_q - c_q))
+					p += u * step_t
+	return p - pt
+
+
+static func _resolve_upper_arm_obstacles(pt: Vector3, pad: float, torso_obstacles: Array, torso_fwd: Vector3, torso_left: Vector3, sign_v: float) -> Vector3:
+	var p: Vector3 = pt
+	var out_lat: Vector3 = torso_left * sign_v
+	for _pass in 2:
+		for obs in torso_obstacles:
+			var c: Vector3 = obs["p0"] if obs["type"] == "sphere" else _closest_pt_seg(p, obs["p0"], obs["p1"])
+			var r_safe: float = float(obs["r"]) + pad
+			var d_vec: Vector3 = p - c
+			var dist_sq: float = d_vec.length_squared()
+			if dist_sq < r_safe * r_safe:
+				var dist: float = sqrt(dist_sq)
+				var push_dir: Vector3 = (d_vec / dist) if dist > 1e-5 else out_lat
+				var lat_dot: float = push_dir.dot(out_lat)
+				if lat_dot < 0.30:
+					push_dir += out_lat * (0.40 - lat_dot)
+				if d_vec.dot(torso_fwd) > -0.02:
+					var fwd_dot: float = push_dir.dot(torso_fwd)
+					if fwd_dot < 0.25:
+						push_dir += torso_fwd * (0.30 - fwd_dot)
+				if push_dir.length_squared() > 1e-8:
+					var u: Vector3 = push_dir.normalized()
+					var b_q: float = d_vec.dot(u)
+					var c_q: float = dist_sq - r_safe * r_safe
+					var step_t: float = -b_q + sqrt(maxf(0.0, b_q * b_q - c_q))
 					p += u * step_t
 	return p - pt
 

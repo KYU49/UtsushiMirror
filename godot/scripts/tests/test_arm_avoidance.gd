@@ -91,6 +91,71 @@ func _run_tests() -> bool:
 	var h_dist_on: float = h_hand_on.distance_to(head_on)
 	ok = _check("頭部付近へのめり込み回避で手首が押し出される (off=%.3f -> on=%.3f)" % [h_dist_off, h_dist_on], h_dist_on > h_dist_off + 0.03 and h_hand_on.is_finite()) and ok
 
+	# 3b) 手首は前方に出ていて問題ないが二の腕(上腕)が胸へめり込む姿勢での弱い貫通抑制
+	var q_up_ua_in := Quaternion(Vector3(1.0, 0.0, 0.0), Vector3(-0.60, -0.65, 0.46).normalized()).normalized()
+	var q_lo_world_fwd := Quaternion(Vector3(1.0, 0.0, 0.0), Vector3(0.25, 0.10, 0.96).normalized()).normalized()
+	var q_lo_ua_in := (q_up_ua_in.inverse() * q_lo_world_fwd).normalized()
+	vrm.avoid_body_enabled = false
+	vrm.vmc_bone_overrides = {
+		"leftUpperArm": q_up_ua_in,
+		"leftLowerArm": q_lo_ua_in,
+		"leftHand": q_hd,
+	}
+	vrm.step(0.016)
+	var sh_ua_off: Vector3 = vrm.humanoid.get_bone_world_transform("leftUpperArm").origin
+	var el_ua_off: Vector3 = vrm.humanoid.get_bone_world_transform("leftLowerArm").origin
+	var ua_mid_off: Vector3 = sh_ua_off.lerp(el_ua_off, 0.65)
+	var bust_ref_off: Vector3 = vrm.humanoid.get_bone_world_transform("chest").origin + Vector3(0.0, 0.05, 0.06)
+	var ua_dist_off: float = ua_mid_off.distance_to(bust_ref_off)
+
+	vrm.arm_avoidance.reset()
+	vrm.avoid_body_enabled = true
+	for _i in 20:
+		vrm.step(0.016)
+	var sh_ua_on: Vector3 = vrm.humanoid.get_bone_world_transform("leftUpperArm").origin
+	var el_ua_on: Vector3 = vrm.humanoid.get_bone_world_transform("leftLowerArm").origin
+	var hand_ua_on: Vector3 = vrm.humanoid.get_bone_world_transform("leftHand").origin
+	var ua_mid_on: Vector3 = sh_ua_on.lerp(el_ua_on, 0.65)
+	var bust_ref_on: Vector3 = vrm.humanoid.get_bone_world_transform("chest").origin + Vector3(0.0, 0.05, 0.06)
+	var ua_dist_on: float = ua_mid_on.distance_to(bust_ref_on)
+	var ua_gain: float = ua_dist_on - ua_dist_off
+	var wr_gain: float = dist_on - dist_off
+	ok = _check("二の腕の胸めり込みが手首より弱く抑えられる (off=%.3f -> on=%.3f, ua_gain=%.3f < wr_gain=%.3f)" % [ua_dist_off, ua_dist_on, ua_gain, wr_gain], ua_gain > 0.015 and ua_gain < wr_gain and ua_mid_on.is_finite() and el_ua_on.is_finite() and hand_ua_on.is_finite()) and ok
+
+	# 3c) 自然に腕を下ろした垂れ腕では不自然に外へ開かない
+	var q_up_left_hang := Quaternion(Vector3(1.0, 0.0, 0.0), Vector3(0.25, -0.97, 0.0).normalized()).normalized()
+	var q_up_right_hang := Quaternion(Vector3(-1.0, 0.0, 0.0), Vector3(-0.25, -0.97, 0.0).normalized()).normalized()
+	vrm.avoid_body_enabled = false
+	vrm.vmc_bone_overrides = {
+		"leftUpperArm": q_up_left_hang,
+		"leftLowerArm": Quaternion.IDENTITY,
+		"rightUpperArm": q_up_right_hang,
+		"rightLowerArm": Quaternion.IDENTITY,
+	}
+	vrm.step(0.016)
+	var l_sh_hang: Vector3 = vrm.humanoid.get_bone_world_transform("leftUpperArm").origin
+	var l_el_hang_off: Vector3 = vrm.humanoid.get_bone_world_transform("leftLowerArm").origin
+	var r_sh_hang: Vector3 = vrm.humanoid.get_bone_world_transform("rightUpperArm").origin
+	var r_el_hang_off: Vector3 = vrm.humanoid.get_bone_world_transform("rightLowerArm").origin
+
+	vrm.arm_avoidance.reset()
+	vrm.avoid_body_enabled = true
+	for _i in 20:
+		vrm.step(0.016)
+	var l_el_hang_on: Vector3 = vrm.humanoid.get_bone_world_transform("leftLowerArm").origin
+	var r_el_hang_on: Vector3 = vrm.humanoid.get_bone_world_transform("rightLowerArm").origin
+	var l_el_delta: float = l_el_hang_on.distance_to(l_el_hang_off)
+	var r_el_delta: float = r_el_hang_on.distance_to(r_el_hang_off)
+	ok = _check("自然な垂れ腕では二の腕が外へ開かない (L=%.4f, R=%.4f)" % [l_el_delta, r_el_delta], l_el_hang_off.y < l_sh_hang.y and r_el_hang_off.y < r_sh_hang.y and l_el_delta < 0.015 and r_el_delta < 0.015) and ok
+
+	# 以降のセクション用に状態を戻す
+	vrm.arm_avoidance.reset()
+	vrm.vmc_bone_overrides = {
+		"leftUpperArm": q_up_in,
+		"leftLowerArm": q_lo_in,
+		"leftHand": q_hd,
+	}
+
 	# 4) SpringBone 手コライダーの生成と揺れものへの押し出し作用
 	vrm.hand_spring_collide_enabled = true
 	vrm.step(0.016)
