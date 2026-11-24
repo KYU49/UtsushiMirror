@@ -1,11 +1,13 @@
 pub mod lipsync;
 pub mod osc_receiver;
+pub mod osc_sender;
 pub mod platform;
 pub mod recorder;
 pub mod ws_server;
 
 use godot::prelude::*;
 use osc_receiver::OscReceiverHandle;
+use osc_sender::OscSenderHandle;
 use recorder::{AudioSegment, FfmpegRecorder, RecordFormat};
 use std::sync::{Arc, Mutex};
 use vrm_protocol::{QueuedRpcRequest, RpcResponse};
@@ -22,6 +24,9 @@ pub struct VrmBridge {
     base: Base<Node>,
     ws_server: Option<WsServerHandle>,
     osc_receiver: Option<OscReceiverHandle>,
+    osc_sender: Option<OscSenderHandle>,
+    osc_last_error: String,
+    osc_send_last_error: String,
     rpc_rx: Option<crossbeam_channel::Receiver<QueuedRpcRequest>>,
     last_vmc_seq: u64,
     platform_state: Arc<Mutex<platform::PlatformState>>,
@@ -35,6 +40,9 @@ impl INode for VrmBridge {
             base,
             ws_server: None,
             osc_receiver: None,
+            osc_sender: None,
+            osc_last_error: String::new(),
+            osc_send_last_error: String::new(),
             rpc_rx: None,
             last_vmc_seq: 0,
             platform_state: Arc::new(Mutex::new(platform::PlatformState::default())),
@@ -66,12 +74,17 @@ impl VrmBridge {
                 return false;
             }
         }
-        match OscReceiverHandle::start(osc_p) {
-            Ok(osc) => self.osc_receiver = Some(osc),
+        match OscReceiverHandle::start("127.0.0.1", osc_p) {
+            Ok(osc) => {
+                self.osc_receiver = Some(osc);
+                self.osc_last_error.clear();
+            }
             Err(e) => {
+                self.osc_last_error = e.clone();
                 godot_error!("VrmBridge failed to start OSC receiver on port {osc_p}: {e}");
             }
         }
+        self.last_vmc_seq = 0;
         self.rpc_rx = Some(rx);
         godot_print!("VrmBridge servers started (WS:{ws_p}, OSC:{osc_p})");
         true
@@ -85,6 +98,8 @@ impl VrmBridge {
         if let Some(osc) = self.osc_receiver.take() {
             osc.stop();
         }
+        self.osc_sender = None;
+        self.last_vmc_seq = 0;
         self.rpc_rx = None;
     }
 
@@ -145,6 +160,103 @@ impl VrmBridge {
             }
         }
         GString::new()
+    }
+
+    #[func]
+    pub fn reconfigure_osc_receiver(&mut self, enabled: bool, bind_lan: bool, port: i32) -> GString {
+        if let Some(osc) = self.osc_receiver.take() {
+            osc.stop();
+        }
+        self.last_vmc_seq = 0;
+        self.osc_last_error.clear();
+        if !enabled {
+            return GString::from(&serde_json::json!({"ok": true, "running": false}).to_string());
+        }
+        let osc_p = u16::try_from(port).unwrap_or(39539);
+        let bind_host = if bind_lan { "0.0.0.0" } else { "127.0.0.1" };
+        match OscReceiverHandle::start(bind_host, osc_p) {
+            Ok(osc) => {
+                let st = osc.status_json();
+                self.osc_receiver = Some(osc);
+                GString::from(&format!(r#"{{"ok":true,"status":{st}}}"#))
+            }
+            Err(e) => {
+                self.osc_last_error = e.clone();
+                godot_error!("VrmBridge failed to start OSC receiver on {bind_host}:{osc_p}: {e}");
+                GString::from(&serde_json::json!({"ok": false, "running": false, "error": e}).to_string())
+            }
+        }
+    }
+
+    #[func]
+    pub fn get_vmc_receiver_status(&self) -> GString {
+        if let Some(osc) = &self.osc_receiver {
+            return GString::from(&osc.status_json());
+        }
+        GString::from(
+            &serde_json::json!({
+                "running": false,
+                "active": false,
+                "packets_per_sec": 0,
+                "packets_total": 0,
+                "last_peer": "",
+                "error": self.osc_last_error,
+            })
+            .to_string(),
+        )
+    }
+
+    #[func]
+    pub fn configure_vmc_sender(&mut self, enabled: bool, host: GString, port: i32) -> GString {
+        self.osc_sender = None;
+        self.osc_send_last_error.clear();
+        if !enabled {
+            return GString::from(&serde_json::json!({"ok": true, "running": false}).to_string());
+        }
+        let target_p = u16::try_from(port).unwrap_or(39540);
+        let h = host.to_string();
+        match OscSenderHandle::start(&h, target_p) {
+            Ok(sender) => {
+                let st = sender.status_json();
+                self.osc_sender = Some(sender);
+                GString::from(&format!(r#"{{"ok":true,"status":{st}}}"#))
+            }
+            Err(e) => {
+                self.osc_send_last_error = e.clone();
+                godot_error!("VrmBridge failed to start VMC sender to {h}:{target_p}: {e}");
+                GString::from(&serde_json::json!({"ok": false, "running": false, "error": e}).to_string())
+            }
+        }
+    }
+
+    #[func]
+    pub fn send_vmc_frame(&mut self, frame_json: GString) -> bool {
+        let Some(sender) = self.osc_sender.as_mut() else {
+            return false;
+        };
+        match sender.send_frame_json(&frame_json.to_string()) {
+            Ok(_) => true,
+            Err(e) => {
+                self.osc_send_last_error = e;
+                false
+            }
+        }
+    }
+
+    #[func]
+    pub fn get_vmc_sender_status(&self) -> GString {
+        if let Some(sender) = &self.osc_sender {
+            return GString::from(&sender.status_json());
+        }
+        GString::from(
+            &serde_json::json!({
+                "running": false,
+                "packets_sent": 0,
+                "frames_sent": 0,
+                "error": self.osc_send_last_error,
+            })
+            .to_string(),
+        )
     }
 
     #[func]
