@@ -816,20 +816,45 @@ class Solver:
         face_r = max(0.06, swa * 0.55)
 
         e = cfg.hand_edge
-        seen2d: list = []
-        good: list = []
+        dup_r = max(0.06, sw * 0.35)
+        dup_same_hl_r = max(0.14, sw * 0.75)
+        good: list = []  # [(img_lms, world_lms, h2d, p2d, h2a, hand_hl, f_near)]
         for item in hands:
             img_lms, world_lms = item[0], item[1]
             hand_hl = item[2] if len(item) >= 3 else None
             h2d = self._pi(img_lms[0])
             if e > 0 and not (e <= h2d[0] <= 1 - e and e <= h2d[1] <= 1 - e):
                 continue  # 画面の端の手は形が崩れやすい
-            if any(float(np.linalg.norm(h2d - o)) < 0.05 for o in seen2d):
-                continue  # 同じ手を 2 回検出したもの
-            seen2d.append(h2d)
+            p2d = (h2d + self._pi(img_lms[9])) * 0.5
+            hl_label = str(hand_hl[0]) if (hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.55) else ""
+            hl_score = float(hand_hl[1]) if (hand_hl is not None and len(hand_hl) >= 2) else 0.0
+
+            # 同じ手の二重検出 (手首/掌が近いもの、または同左右判定で近接するゴースト) を抑止
+            dup_idx = -1
+            for gi, existing in enumerate(good):
+                _, _, eh2d, ep2d, _, ehl, _ = existing
+                d_w = float(np.linalg.norm(h2d - eh2d))
+                d_p = float(np.linalg.norm(p2d - ep2d))
+                same_hl = (
+                    hl_label != ""
+                    and ehl is not None
+                    and len(ehl) >= 2
+                    and float(ehl[1]) >= 0.55
+                    and str(ehl[0]) == hl_label
+                )
+                if d_w < dup_r or d_p < dup_r or (same_hl and d_w < dup_same_hl_r):
+                    dup_idx = gi
+                    break
             h2a = self._pa(img_lms[0])
             f_near = 1.0 - _ramp(float(np.linalg.norm(h2a - face_c)), face_r * 0.5, face_r * 1.5)
-            good.append((img_lms, world_lms, h2d, h2a, hand_hl, f_near))
+            cand = (img_lms, world_lms, h2d, p2d, h2a, hand_hl, f_near)
+            if dup_idx >= 0:
+                ehl = good[dup_idx][5]
+                escore = float(ehl[1]) if (ehl is not None and len(ehl) >= 2) else 0.0
+                if hl_score > escore + 0.1:
+                    good[dup_idx] = cand  # より信頼度の高い方を残す
+                continue
+            good.append(cand)
 
         can_est = (cfg.arm_from_hand and self._chest_world is not None
                    and min(self._vis(pose_image, ls), self._vis(pose_image, rs)) >= cfg.min_visibility)
@@ -838,7 +863,7 @@ class Solver:
         if not can_est:
             # 推定オフ時やテスト時 (胸ワールド回転なし): 姿勢推定の手首が近い腕にのみ割り当てる
             used: set = set()
-            for idx, (img_lms, world_lms, h2d, h2a, _hl, f_near) in enumerate(good):
+            for idx, (img_lms, world_lms, h2d, _p2d, h2a, _hl, f_near) in enumerate(good):
                 cands = [s for s in ("left", "right") if f"__{s}LowerArmWorld" in res.bones and s not in assigned]
                 if not cands:
                     continue
@@ -849,7 +874,7 @@ class Solver:
                     used.add(idx)
         elif good:
             def assign_cost(entry, side: str) -> float:
-                _il, _wl, h2d, h2a, hand_hl, f_near = entry
+                _il, _wl, h2d, _p2d, h2a, hand_hl, f_near = entry
                 cost = 0.0
                 prev_e = self._last_hand2d.get(side)
                 if prev_e is not None and (self._t_now - prev_e[1]) < 0.5:
@@ -863,37 +888,85 @@ class Solver:
                         # 非反転入力前提: MediaPipe の "Left" = 本人の物理右手
                         exp_side = ("left" if label == "Left" else "right") if cfg.mirror else ("right" if label == "Left" else "left")
                         if exp_side != side:
-                            cost += 0.55 * float(hand_hl[1])
+                            cost += 0.75 * float(hand_hl[1])
+                w_pw = 1.0 - 0.55 * f_near
                 if f"__{side}LowerArmWorld" in res.bones:
-                    w_pw = 1.0 - 0.65 * f_near
                     d_pw = float(np.linalg.norm(wrist2d[side] - h2d))
-                    cost += w_pw * 0.8 * min(1.5, d_pw / max(0.05, max_d))
+                    cost += w_pw * 1.1 * min(1.5, d_pw / max(0.05, max_d))
+                else:
+                    # 姿勢推定でその側の腕が取れていない場合も対称な基準コストを課し、片腕だけ取れている側の手を奪わせない
+                    cost += w_pw * 1.1 * 1.15
                 cost += 0.25 * float(np.linalg.norm(sh2d[side] - h2a)) / swa
                 return cost
+
+            def steals_other_pose(entry, target_side: str) -> bool:
+                _il, _wl, h2d_pt, _p2d, _h2a, hand_hl, _fn = entry
+                other = "right" if target_side == "left" else "left"
+                if f"__{target_side}LowerArmWorld" in res.bones or f"__{other}LowerArmWorld" not in res.bones:
+                    return False
+                prev_t = self._last_hand2d.get(target_side)
+                tracked_target = prev_t is not None and (self._t_now - prev_t[1]) < 0.35
+                if tracked_target and hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.75:
+                    lbl = str(hand_hl[0])
+                    if lbl in ("Left", "Right"):
+                        exp_s = ("left" if lbl == "Left" else "right") if cfg.mirror else ("right" if lbl == "Left" else "left")
+                        if exp_s == target_side:
+                            return False
+                return float(np.linalg.norm(wrist2d[other] - h2d_pt)) <= max_d * 1.1
 
             if len(good) == 1:
                 c_l = assign_cost(good[0], "left")
                 c_r = assign_cost(good[0], "right")
                 best_s = "left" if c_l <= c_r else "right"
-                il, wl, h2d, h2a, _hl, fn = good[0]
+                il, wl, h2d, _p2d, h2a, _hl, fn = good[0]
+                if steals_other_pose(good[0], best_s):
+                    best_s = "right" if best_s == "left" else "left"
                 assigned[best_s] = (il, wl, h2d, h2a, fn)
             else:
                 pool = good[:4]
-                best_pair = None
-                best_c = float("inf")
+                # 最良の片手割り当て (もう片方は無理に付けない比較基準)
+                best_single_side = "left"
+                best_single_idx = 0
+                best_single_c = float("inf")
                 for i in range(len(pool)):
+                    for s in ("left", "right"):
+                        if steals_other_pose(pool[i], s):
+                            continue
+                        sc = assign_cost(pool[i], s)
+                        if sc < best_single_c:
+                            best_single_c = sc
+                            best_single_side = s
+                            best_single_idx = i
+
+                best_pair = None
+                best_pair_c = float("inf")
+                for i in range(len(pool)):
+                    if steals_other_pose(pool[i], "left"):
+                        continue
+                    c_l = assign_cost(pool[i], "left")
+                    if c_l >= 2.3:
+                        continue
                     for j in range(len(pool)):
                         if i == j:
                             continue
-                        c = assign_cost(pool[i], "left") + assign_cost(pool[j], "right")
-                        if c < best_c:
-                            best_c = c
+                        if steals_other_pose(pool[j], "right"):
+                            continue
+                        c_r = assign_cost(pool[j], "right")
+                        if c_r >= 2.3:
+                            continue
+                        tot = c_l + c_r
+                        if tot < best_pair_c:
+                            best_pair_c = tot
                             best_pair = (i, j)
-                if best_pair is not None:
-                    il0, wl0, h2d0, h2a0, _hl0, fn0 = pool[best_pair[0]]
-                    il1, wl1, h2d1, h2a1, _hl1, fn1 = pool[best_pair[1]]
+
+                if best_pair is not None and best_pair_c <= best_single_c + 1.65:
+                    il0, wl0, h2d0, _p0, h2a0, _hl0, fn0 = pool[best_pair[0]]
+                    il1, wl1, h2d1, _p1, h2a1, _hl1, fn1 = pool[best_pair[1]]
                     assigned["left"] = (il0, wl0, h2d0, h2a0, fn0)
                     assigned["right"] = (il1, wl1, h2d1, h2a1, fn1)
+                else:
+                    il, wl, h2d, _p2d, h2a, _hl, fn = pool[best_single_idx]
+                    assigned[best_single_side] = (il, wl, h2d, h2a, fn)
 
         # 腕を決めて手を付ける
         trust_rate = self._dt / 0.45

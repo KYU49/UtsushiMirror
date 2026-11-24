@@ -526,5 +526,61 @@ tip_on_spike = arm_tip(r_spike)
 spike_deg = math.degrees(angle_between(tip_before_spike, tip_on_spike))
 ok &= check(f"顔付近の1フレーム外れ値テレポートを棄却 (跳ね={spike_deg:.2f}°)", spike_deg < 3.0)
 
+# 5) 片手(右手)だけ見えて左腕がPoseで欠損していても、左腕が右手を奪って崩れない (非ミラー / ミラー両対応)
+for mir, hl_lbl in ((False, "Left"), (True, "Right")):
+    sv_one = Solver(SolverConfig(mirror=mir, smooth=0.0, stabilize=0.0))
+    bw_one = body_no_left_arm() if not mir else body(True)
+    if mir:
+        # 鏡モード時は本人の左手(lm 13,15)を欠損させてモデルの右腕のみ生かすつもりの逆に、モデルの左腕(14,16)を欠損させる
+        for k in (14, 16):
+            bw_one[k] = L(x=bw_one[k].x, y=bw_one[k].y, z=bw_one[k].z, visibility=0.05)
+    im_one = pose_with_face()
+    if mir:
+        # mirror=True: _side(15,16) -> lw=16, rw=15。モデルの右腕(=lm 15)を有効にし、モデルの左腕(=lm 16)を無効に
+        im_one[15] = L(x=0.60, y=0.50, z=0.0, visibility=1.0)
+        im_one[16] = L(x=0.40, y=0.50, z=0.0, visibility=0.05)
+        hx_one = 0.62  # _pi(0.62) = 0.38 (モデル右側)
+    else:
+        # mirror=False: rw=16 を有効、lw=15 を無効に
+        im_one[16] = L(x=0.38, y=0.50, z=0.0, visibility=1.0)
+        im_one[15] = L(x=0.62, y=0.50, z=0.0, visibility=0.05)
+        im_one[13] = L(x=0.62, y=0.45, z=0.0, visibility=0.05)
+        hx_one = 0.43  # Pose 右手首から少しだけ内側にズレた位置
+    h_one = [L(x=hx_one, y=0.48, z=0.0) for _ in range(21)]
+    r_one = sv_one.solve(pose_world=bw_one, pose_image=im_one,
+                         hands=[(h_one, flat_hand(np.array([0, 0, 0, 1.0])), (hl_lbl, 0.85))], t=0.0)
+    ok &= check(f"右手のみ検出時に左腕が右手を奪わない (mirror={mir})",
+                "rightHand" in r_one.bones and "leftHand" not in r_one.bones and "leftUpperArm" not in r_one.bones)
+
+# 6) 同じ右手への二重検出 (距離 0.07) があっても片腕に重複・反対腕奪取しない
+sv_dup = Solver(SolverConfig(mirror=False, smooth=0.0, stabilize=0.0))
+im_dup = pose_with_face()
+im_dup[16] = L(x=0.38, y=0.50, z=0.0, visibility=1.0)
+im_dup[15] = L(x=0.62, y=0.50, z=0.0, visibility=0.05)
+im_dup[13] = L(x=0.62, y=0.45, z=0.0, visibility=0.05)
+h_dup1 = [L(x=0.38, y=0.48, z=0.0) for _ in range(21)]
+h_dup2 = [L(x=0.45, y=0.48, z=0.0) for _ in range(21)]
+r_dup = sv_dup.solve(pose_world=body_no_left_arm(), pose_image=im_dup,
+                     hands=[(h_dup1, flat_hand(np.array([0, 0, 0, 1.0])), ("Left", 0.9)),
+                            (h_dup2, flat_hand(np.array([0, 0, 0, 1.0])), ("Right", 0.55))], t=0.0)
+ok &= check("右手の二重検出ゴーストで左腕が奪われない",
+            "rightHand" in r_dup.bones and "leftHand" not in r_dup.bones and "leftUpperArm" not in r_dup.bones)
+
+# 7) Poseで両腕が欠損中に右側へ左手と同じ位置に同ラベルのゴーストが2つ出ても片手のみ採用
+sv_gh = Solver(SolverConfig(mirror=False, smooth=0.0, stabilize=0.0))
+bw_none = body_no_left_arm()
+for k in (14, 16):
+    bw_none[k] = L(x=bw_none[k].x, y=bw_none[k].y, z=bw_none[k].z, visibility=0.05)
+im_none = pose_with_face()
+for k in (13, 14, 15, 16):
+    im_none[k] = L(x=0.5, y=0.5, z=0.0, visibility=0.05)
+h_gh1 = [L(x=0.32, y=0.45, z=0.0) for _ in range(21)]
+h_gh2 = [L(x=0.42, y=0.45, z=0.0) for _ in range(21)]
+r_gh = sv_gh.solve(pose_world=bw_none, pose_image=im_none,
+                   hands=[(h_gh1, flat_hand(np.array([0, 0, 0, 1.0])), ("Left", 0.92)),
+                          (h_gh2, flat_hand(np.array([0, 0, 0, 1.0])), ("Left", 0.70))], t=0.0)
+ok &= check("同ラベルの近接ゴースト手があっても右手のみに割り当てる",
+            "rightHand" in r_gh.bones and "leftHand" not in r_gh.bones and "leftUpperArm" not in r_gh.bones)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
