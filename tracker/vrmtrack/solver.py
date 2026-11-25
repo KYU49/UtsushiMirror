@@ -598,25 +598,30 @@ class Solver:
         pose_vec: tuple | None = None,
         palm_scale: float = 1.0,
         face_near: float = 0.0,
+        face_c: np.ndarray | None = None,
     ) -> tuple:
         """手主導ハイブリッド 2-Bone IK: 手首位置から上腕・前腕を連続的に求め、
         信頼できる Pose 肘・奥行きと高度適応型ポールベクトルを滑らかに融合する。"""
         sign = 1.0 if side == "left" else -1.0
-        k = SHOULDER_WIDTH_M / max(0.03, sw)
+        sw_safe = max(0.03, sw)
+        k = 0.32 / sw_safe
         dx = float(hand2d[0] - sh2d[0]) * k
         dy = -float(hand2d[1] - sh2d[1]) * k
+        if face_c is not None:
+            y_w = 1.0 - _ramp(abs(float(hand2d[1] - face_c[1])), sw_safe * 0.25, sw_safe * 0.65)
+            out_rel = sign * float(hand2d[0] - face_c[0]) / sw_safe
+            if y_w > 0.0 and out_rel > 0.16:
+                dx += sign * y_w * _ramp(out_rel, 0.16, 0.42) * 0.055
         lu, ll = 0.28, 0.26
         reach = (lu + ll) * 0.98
         planar = math.hypot(dx, dy)
         if planar > reach * 0.99:
             s_cl = (reach * 0.99) / planar
             dx, dy, planar = dx * s_cl, dy * s_cl, reach * 0.99
-        base_r = reach * 0.72
+        base_r = reach * (0.64 - 0.16 * _clamp01(face_near))
         dz_geo = math.sqrt(max(0.02 * 0.02, base_r * base_r - planar * planar * 0.65))
         dz_est = max(0.02, dz_geo + 0.14 * (palm_scale - 1.0))
         t = np.array([dx, dy, dz_est], dtype=float)
-        if self._inv0 is not None:
-            t = q_rot(self._inv0, t)
         if pose_vec is not None and pose_trust > 0.01:
             p_wr = np.asarray(pose_vec[1], dtype=float)
             z_pose = float(p_wr[2]) if abs(float(p_wr[2])) > 0.02 else float(t[2])
@@ -824,11 +829,12 @@ class Solver:
             img_lms, world_lms = item[0], item[1]
             hand_hl = item[2] if len(item) >= 3 else None
             h2d = self._pi(img_lms[0])
-            p2d = (h2d + self._pi(img_lms[9])) * 0.5
-            if e > 0 and not (e <= p2d[0] <= 1.0 - e and e <= p2d[1] <= 1.0 - e * 0.5):
-                continue  # 画面の端に掌ごと掛かる手は形が崩れやすい
-            if not (-0.06 <= h2d[0] <= 1.06 and -0.06 <= h2d[1] <= 1.15):
-                continue  # 手首が画面外へ大きく外挿されている場合は除外
+            m2d = self._pi(img_lms[9])
+            p2d = (h2d + m2d) * 0.5
+            if e > 0 and not (e <= p2d[0] <= 1.0 - e and e <= p2d[1] <= 1.03):
+                continue  # 左右端・上端に掛かる手や画面下に沈んだ掌は除外
+            if m2d[1] > 1.02 or not (-0.06 <= h2d[0] <= 1.06 and -0.06 <= h2d[1] <= 1.18):
+                continue  # 指付け根が画角外、または手首が大きく外挿されている場合は除外
             hl_label = str(hand_hl[0]) if (hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.55) else ""
             hl_score = float(hand_hl[1]) if (hand_hl is not None and len(hand_hl) >= 2) else 0.0
 
@@ -879,43 +885,67 @@ class Solver:
             def assign_cost(entry, side: str) -> float:
                 _il, _wl, h2d, _p2d, h2a, hand_hl, f_near = entry
                 cost = 0.0
+                base_temp = 0.65
                 prev_e = self._last_hand2d.get(side)
                 if prev_e is not None and (self._t_now - prev_e[1]) < 0.5:
-                    dt_h = max(0.0, self._t_now - prev_e[1])
-                    cost += min(1.4, 1.4 * (1.0 - dt_h / 0.5) * float(np.linalg.norm(h2a - prev_e[0])) / swa)
+                    fade = 1.0 - max(0.0, self._t_now - prev_e[1]) / 0.5
+                    d_norm = float(np.linalg.norm(h2a - prev_e[0])) / swa
+                    cost += base_temp + fade * (min(1.4, 1.4 * d_norm) - base_temp)
                 else:
-                    cost += 0.65
+                    cost += base_temp
+                pose_match = {
+                    s: (f"__{s}LowerArmWorld" in res.bones and float(np.linalg.norm(wrist2d[s] - h2d)) <= max_d * 0.85)
+                    for s in ("left", "right")
+                }
+                has_pose_anchor = pose_match["left"] or pose_match["right"]
                 if hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.55:
                     label = str(hand_hl[0])
                     if label in ("Left", "Right"):
                         # 非反転入力前提: MediaPipe の "Left" = 本人の物理右手
                         exp_side = ("left" if label == "Left" else "right") if cfg.mirror else ("right" if label == "Left" else "left")
                         if exp_side != side:
-                            cost += 0.75 * float(hand_hl[1])
-                w_pw = 1.0 - 0.55 * f_near
+                            cost += (0.38 if has_pose_anchor else 0.75) * float(hand_hl[1])
+                w_pw = 1.0 - 0.20 * f_near
                 if f"__{side}LowerArmWorld" in res.bones:
                     d_pw = float(np.linalg.norm(wrist2d[side] - h2d))
                     cost += w_pw * 1.1 * min(1.5, d_pw / max(0.05, max_d))
                 else:
                     # 姿勢推定でその側の腕が取れていない場合も対称な基準コストを課し、片腕だけ取れている側の手を奪わせない
                     cost += w_pw * 1.1 * 1.15
+                side_sgn = 1.0 if side == "left" else -1.0
+                lat_from_mid = side_sgn * float(h2a[0] - sh_mid_a[0]) / swa  # 正 = 自側, 負 = 反対側
+                if lat_from_mid < -0.15 and not pose_match[side]:
+                    cost += min(0.8, (-lat_from_mid - 0.15) * 1.1)
                 cost += 0.25 * float(np.linalg.norm(sh2d[side] - h2a)) / swa
                 return cost
 
             def steals_other_pose(entry, target_side: str) -> bool:
-                _il, _wl, h2d_pt, _p2d, _h2a, hand_hl, _fn = entry
+                _il, _wl, h2d_pt, _p2d, h2a_pt, hand_hl, _fn = entry
                 other = "right" if target_side == "left" else "left"
                 if f"__{target_side}LowerArmWorld" in res.bones or f"__{other}LowerArmWorld" not in res.bones:
                     return False
+                d_other = float(np.linalg.norm(wrist2d[other] - h2d_pt))
+                if d_other > max_d * 1.1:
+                    return False
+                # 相手の Pose 手首がすぐ近くにあり、かつ手も相手側の半身にあるなら奪取禁止
+                other_sgn = 1.0 if other == "left" else -1.0
+                on_other_side = other_sgn * float(h2a_pt[0] - sh_mid_a[0]) > 0.08 * swa
+                if d_other <= max_d * 0.75 and on_other_side:
+                    return True
+                # 正中線越え中の継続追跡のみ例外許可 (距離も近いこと: 下げた直後の反対手は除外)
                 prev_t = self._last_hand2d.get(target_side)
-                tracked_target = prev_t is not None and (self._t_now - prev_t[1]) < 0.35
-                if tracked_target and hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.75:
+                tracked_near = (
+                    prev_t is not None
+                    and (self._t_now - prev_t[1]) < 0.35
+                    and float(np.linalg.norm(h2a_pt - prev_t[0])) < swa * 0.70
+                )
+                if tracked_near and hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.75:
                     lbl = str(hand_hl[0])
                     if lbl in ("Left", "Right"):
                         exp_s = ("left" if lbl == "Left" else "right") if cfg.mirror else ("right" if lbl == "Left" else "left")
                         if exp_s == target_side:
                             return False
-                return float(np.linalg.norm(wrist2d[other] - h2d_pt)) <= max_d * 1.1
+                return True
 
             if len(good) == 1:
                 c_l = assign_cost(good[0], "left")
@@ -1020,6 +1050,7 @@ class Solver:
             else:
                 self._hand_jump[side] = 0
             self._last_hand2d[side] = (h2a.copy(), self._t_now)
+            f_near = 1.0 - _ramp(float(np.linalg.norm(h2a - face_c)), face_r * 0.5, face_r * 1.5)
 
             # 2) 見かけの手の大きさ比による奥行き補助 + IK 前座標フィルタ
             palm_px = float(np.linalg.norm(self._pa(img_lms[9]) - self._pa(img_lms[0])))
@@ -1075,6 +1106,7 @@ class Solver:
             up, lo = self._arm_from_hand(
                 side, h2a_f, sh2d[side], swa,
                 pose_trust=pt, pose_vec=pose_vec, palm_scale=palm_scale_f, face_near=f_near,
+                face_c=face_c,
             )
             self._est_w[side] = 1.0 - pt
             parent = q_mul(self._chest_world, self._sh_q.get(side, IDENT)) if self._chest_world is not None else IDENT

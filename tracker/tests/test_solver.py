@@ -662,5 +662,106 @@ if "leftHand" in r_re.bones:
 ok &= check("手が一時離脱後に裏返って再登場しても初フレームで反映される",
             "leftHand" in r_re.bones and q_rot(q_lw_re, np.array([0.0, 0.0, 1.0]))[2] < -0.7)
 
+# 12) 反対側の手を下げた直後に頬横に手を上げても、誤 handedness で反対側の腕がクロスして奪わない
+sv_cross = Solver(SolverConfig(mirror=True, smooth=0.0, stabilize=0.0))
+im_cr0 = pose_with_face()
+# mirror=True -> lm 15 はモデル右手, lm 16 はモデル左手
+im_cr0[11] = L(x=0.68, y=0.86, z=0.0, visibility=0.9)
+im_cr0[12] = L(x=0.32, y=0.86, z=0.0, visibility=0.9)
+im_cr0[15] = L(x=0.72, y=0.75, z=0.0, visibility=0.9)
+im_cr0[13] = L(x=0.76, y=0.92, z=0.0, visibility=0.9)
+im_cr0[16] = L(x=0.28, y=1.10, z=0.0, visibility=0.05)
+im_cr0[14] = L(x=0.28, y=1.05, z=0.0, visibility=0.05)
+h_cr_r = [L(x=0.72, y=0.75, z=0.0) for _ in range(21)]
+sv_cross.solve(pose_world=body(True), pose_image=im_cr0,
+               hands=[(h_cr_r, flat_hand(np.array([0.0, 0.0, 0.0, 1.0])), ("Left", 0.90))], t=0.0)
+
+im_cr1 = pose_with_face()
+im_cr1[11] = L(x=0.68, y=0.86, z=0.0, visibility=0.9)
+im_cr1[12] = L(x=0.32, y=0.86, z=0.0, visibility=0.9)
+im_cr1[16] = L(x=0.28, y=0.58, z=0.0, visibility=0.9)   # mirror=True でモデル左手首 (_pi=0.72)
+im_cr1[14] = L(x=0.22, y=0.88, z=0.0, visibility=0.85)
+im_cr1[15] = L(x=0.72, y=1.12, z=0.0, visibility=0.05)  # モデル右手首は下がって欠損
+im_cr1[13] = L(x=0.72, y=1.05, z=0.0, visibility=0.05)
+bw_cr1 = body(True)
+bw_cr1[14] = L(x=-0.25, y=-0.35, z=-0.10, visibility=0.9)
+bw_cr1[16] = L(x=-0.18, y=-0.65, z=-0.20, visibility=0.9)
+bw_cr1[13] = L(x=0.2, y=-0.2, z=0.0, visibility=0.05)
+bw_cr1[15] = L(x=0.2, y=0.05, z=0.0, visibility=0.05)
+h_cr_l = [L(x=0.28, y=0.58, z=0.0) for _ in range(21)]
+h_cr_l[9] = L(x=0.30, y=0.45, z=0.0)
+# 顔横のエッジ姿勢で誤って handedness=("Right", 0.90) (mirror=True では右腕を主張) が来たケース
+r_cr = sv_cross.solve(pose_world=bw_cr1, pose_image=im_cr1,
+                      hands=[(h_cr_l, pts_back, ("Right", 0.90))], t=0.35)
+ok &= check("反対手下げ直後の顔横で誤handednessが来てもクロス取り違えしない",
+            "leftHand" in r_cr.bones and sv_cross._hand_seen_t.get("right", -1.0) == 0.0)
+
+# 13) こめかみ横の手が体キャリブレーションのヨー回転(18°)で顔の中心へ流れず顔外側に保たれる
+sv_yaw = Solver(SolverConfig(mirror=True, smooth=0.0, stabilize=0.0, use_face=False))
+sv_yaw.aspect = 16.0 / 9.0
+yaw18 = math.radians(18.0)
+q_yaw = q_axis_angle([0.0, 1.0, 0.0], yaw18)
+pts_y = [L(x=0, y=0, z=0, visibility=1.0) for _ in range(33)]
+for idx_b, v in ((11, [0.2, 0.5, 0.0]), (12, [-0.2, 0.5, 0.0]), (23, [0.1, 0.0, 0.0]), (24, [-0.1, 0.0, 0.0])):
+    vr = q_rot(q_yaw, np.array(v, dtype=float))
+    pts_y[idx_b] = L(x=vr[0], y=-vr[1], z=-vr[2], visibility=1.0)
+im_y = [L(x=0.5, y=0.5, z=0.0, visibility=1.0) for _ in range(33)]
+im_y[0] = L(x=1.0 - 0.48, y=0.48, z=0.0, visibility=1.0)
+im_y[11] = L(x=1.0 - 0.28, y=0.87, z=0.0, visibility=1.0)
+im_y[12] = L(x=1.0 - 0.72, y=0.88, z=0.0, visibility=1.0)
+sv_yaw.start_capture()
+for i in range(4):
+    sv_yaw.solve(pose_world=pts_y, pose_image=im_y, t=i / 30.0)
+sv_yaw.finish_capture()
+
+im_y[13] = L(x=1.0 - 0.18, y=0.98, z=0.0, visibility=0.9)
+im_y[15] = L(x=1.0 - 0.28, y=0.62, z=0.0, visibility=0.95)
+im_y[14] = L(x=1.0 - 0.75, y=1.05, z=0.0, visibility=0.05)
+im_y[16] = L(x=1.0 - 0.75, y=1.20, z=0.0, visibility=0.05)
+pw_y = [L(x=vr[0], y=-vr[1], z=-vr[2], visibility=1.0) for vr in
+        [q_rot(q_yaw, np.array([0.0, 0.0, 0.0])) for _ in range(33)]]
+for idx_b, v in ((11, [0.19, 0.45, 0.0]), (12, [-0.19, 0.45, 0.0]), (23, [0.10, 0.0, 0.0]), (24, [-0.10, 0.0, 0.0]),
+                 (13, [0.28, 0.22, 0.12]), (15, [0.18, 0.60, 0.25])):
+    vr = q_rot(q_yaw, np.array(v, dtype=float))
+    pw_y[idx_b] = L(x=vr[0], y=-vr[1], z=-vr[2], visibility=1.0)
+for k_off in (14, 16):
+    pw_y[k_off] = L(x=0.0, y=0.0, z=0.0, visibility=0.05)
+h_y = [L(x=1.0 - 0.28, y=0.62, z=0.0) for _ in range(21)]
+h_y[9] = L(x=1.0 - 0.30, y=0.49, z=0.0)
+r_y = sv_yaw.solve(pose_world=pw_y, pose_image=im_y, hands=[(h_y, pts_back, ("Right", 0.92))], t=0.3)
+wr_y_x = -0.13 + arm_tip(r_y, "right")[0]
+ok &= check(f"こめかみ横の手はキャリブレーション(18°)後も顔外側に保たれる (wr_x={wr_y_x:.3f})", wr_y_x < -0.11)
+
+# 14) 胸高さの低い手で手首が画面下外 (y=1.06) でも指付け根 (y=0.94) が映っていれば手が維持される
+sv_low = Solver(SolverConfig(mirror=True, smooth=0.0, hand_edge=0.03))
+im_low = pose_with_face()
+im_low[11] = L(x=0.68, y=0.88, z=0.0, visibility=0.8)
+im_low[12] = L(x=0.32, y=0.88, z=0.0, visibility=0.8)
+im_low[16] = L(x=0.22, y=1.06, z=0.0, visibility=0.8)
+im_low[14] = L(x=0.16, y=1.15, z=0.0, visibility=0.7)
+h_low = [L(x=0.22, y=1.06, z=0.0) for _ in range(21)]
+h_low[9] = L(x=0.28, y=0.94, z=0.0)
+r_low = sv_low.solve(pose_world=body(True), pose_image=im_low, hands=[(h_low, pts_back, ("Right", 0.90))], t=0.0)
+ok &= check("画面下端(手首y=1.06, 掌付け根y=0.94)でも手が維持され勝手に下がらない", "leftHand" in r_low.bones)
+
+# 15) 顎前の片手で handedness がちらついても右腕が左腕に飛ばない
+sv_fl = Solver(SolverConfig(mirror=True, smooth=0.0, stabilize=0.0))
+im_fl = pose_with_face()
+im_fl[11] = L(x=0.68, y=0.86, z=0.0, visibility=0.9)
+im_fl[12] = L(x=0.32, y=0.86, z=0.0, visibility=0.9)
+im_fl[15] = L(x=0.58, y=0.84, z=0.0, visibility=0.9)   # mirror=True -> モデル右手 (_pi=0.42)
+im_fl[13] = L(x=0.64, y=0.96, z=0.0, visibility=0.85)
+im_fl[16] = L(x=0.32, y=1.10, z=0.0, visibility=0.05)
+im_fl[14] = L(x=0.32, y=1.04, z=0.0, visibility=0.05)
+bw_fl = body(True)
+bw_fl[14] = L(x=-0.2, y=-0.2, z=0.0, visibility=0.05)
+bw_fl[16] = L(x=-0.2, y=0.05, z=0.0, visibility=0.05)
+h_fl = [L(x=0.58, y=0.84, z=0.0) for _ in range(21)]
+h_fl[9] = L(x=0.54, y=0.72, z=0.0)
+r_fl0 = sv_fl.solve(pose_world=bw_fl, pose_image=im_fl, hands=[(h_fl, pts_back, ("Left", 0.85))], t=0.0)
+r_fl1 = sv_fl.solve(pose_world=bw_fl, pose_image=im_fl, hands=[(h_fl, pts_back, ("Right", 0.85))], t=1 / 30.0)
+ok &= check("顎前片手のhandednessちらつきでも反対腕に飛ばない",
+            "rightHand" in r_fl0.bones and "rightHand" in r_fl1.bones and "leftHand" not in r_fl1.bones)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
