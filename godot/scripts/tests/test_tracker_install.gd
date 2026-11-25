@@ -33,6 +33,14 @@ func _process(_d: float) -> bool:
 		var r: Dictionary = _m.start_tracking()
 		_check("入っていないと開始せずに案内する", not r.get("ok", true) and str(r.get("error", "")).contains("インストール"))
 		sw.visible = true
+		# 見出しの右上のボタン: 入っていなければインストールの案内に変わり、押すとトラッキングのページと案内を出す
+		sw._select_tab("Model")
+		sw._refresh_hdr_tracking()
+		_check("見出しのボタンがインストールの案内になる", sw._hdr_trk_btn.text.contains("インストール"))
+		sw._on_hdr_tracking_pressed()
+		_check("見出しのボタンでトラッキングのページへ移る", sw._active_tab_id == "Tracking")
+		_check("見出しのボタンでインストールの案内が出る", sw._trk_install_dlg.visible)
+		sw._trk_install_dlg.hide()
 		sw._select_tab("Tracking")
 	if _f == 40:
 		sw._refresh_tracking_install()
@@ -61,6 +69,14 @@ func _process(_d: float) -> bool:
 		print("---- dialog ----\n", dlg.dialog_text, "\n----")
 		if OS.get_environment("TEST_DO_INSTALL") != "1":
 			dlg.hide()
+			# 動いているときは「停止」になり、押すと止まる (カメラを使わないよう、待つだけのプロセスで代わりにする)
+			var dummy := OS.create_process("ping.exe", PackedStringArray(["-n", "30", "127.0.0.1"]))
+			_m.tracking._pid = dummy
+			sw._refresh_hdr_tracking()
+			_check("動いていると見出しのボタンが停止になる", sw._hdr_trk_btn.text.contains("停止"))
+			sw._on_hdr_tracking_pressed()
+			_check("見出しのボタンで止める", not _m.tracking.is_running() and not sw._hdr_trk_btn.text.contains("停止"))
+			OS.kill(dummy)
 			print("TEST_TRACKER_INSTALL_RESULT=", "PASS" if _ok else "FAIL")
 			return true
 		dlg.get_ok_button().pressed.emit()

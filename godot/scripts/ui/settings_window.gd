@@ -103,6 +103,10 @@ var _sb_panel: PanelContainer
 var _sb_lbl: Label
 var _sb_btn: Button
 var _sb_close: Button
+## 見出しの右上の、トラッキングの開始・停止ボタン
+var _hdr_trk_btn: Button
+var _hdr_trk_key := ""
+var _hdr_trk_wait := 0.0
 var _sb_action: Callable
 var _sb_timer: Timer
 
@@ -223,15 +227,12 @@ func _ensure_built() -> void:
 	_hdr_api_lbl.text = "● API"
 	hdr_hb.add_child(_hdr_api_lbl)
 
-	var b_hdr_close := Button.new()
-	b_hdr_close.text = "閉じる"
-	b_hdr_close.pressed.connect(func():
-		if controller != null:
-			controller.close_settings_window()
-		else:
-			hide()
-	)
-	hdr_hb.add_child(b_hdr_close)
+	# 右上はトラッキングの開始・停止 (入っていなければインストールの案内)。閉じるのは下の「ウィンドウを閉じる」か枠の ×
+	_hdr_trk_btn = Button.new()
+	_hdr_trk_btn.text = "▶ トラッキング開始"
+	_hdr_trk_btn.theme_type_variation = "AccentButton"
+	_hdr_trk_btn.pressed.connect(_on_hdr_tracking_pressed)
+	hdr_hb.add_child(_hdr_trk_btn)
 
 	# ---- 中央 2 カラム (左サイドバー + 右コンテンツ)
 	var mid := HBoxContainer.new()
@@ -507,7 +508,13 @@ func _on_visibility_changed() -> void:
 		_sync_active_tab()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# 見出しのトラッキングのボタンは、どのページでも 0.3 秒ごとに今の状態へ合わせる
+	if visible:
+		_hdr_trk_wait -= delta
+		if _hdr_trk_wait <= 0.0:
+			_hdr_trk_wait = 0.3
+			_refresh_hdr_tracking()
 	if _active_tab_id == "Anim" and visible and _tab_anim != null:
 		_tab_anim.update_scrubber()
 
@@ -659,6 +666,54 @@ func _on_recent_settings_selected(idx: int) -> void:
 		else:
 			show_snackbar("読み込み失敗: " + str(r.get("error", "")))
 		_refresh_recent_settings()
+
+
+# ---- 見出しのトラッキングのボタン
+func _on_hdr_tracking_pressed() -> void:
+	if controller == null or controller.tracking == null:
+		return
+	var trk = controller.tracking
+	if trk.is_running():
+		controller.stop_tracking()
+	elif not trk.is_installed():
+		_select_tab("Tracking")
+		if not trk.is_installing():
+			_show_tracking_install_dialog()
+	else:
+		var r: Dictionary = controller.start_tracking()
+		if not r.get("ok", false):
+			show_snackbar("トラッキング開始エラー: " + str(r.get("error", "")))
+	_refresh_hdr_tracking()
+
+
+func _refresh_hdr_tracking() -> void:
+	if _hdr_trk_btn == null or controller == null or controller.tracking == null:
+		return
+	var trk = controller.tracking
+	var running: bool = trk.is_running()
+	var installed: bool = trk.is_installed()
+	var installing: bool = trk.is_installing()
+	var key := "%s|%s|%s" % [running, installed, installing]
+	if key == _hdr_trk_key:
+		return
+	_hdr_trk_key = key
+	_hdr_trk_btn.disabled = installing
+	if running:
+		_hdr_trk_btn.text = "■ トラッキング停止"
+		_hdr_trk_btn.theme_type_variation = "DangerButton"
+		_hdr_trk_btn.tooltip_text = "Web カメラのトラッキングを止めます"
+	elif installing:
+		_hdr_trk_btn.text = "インストール中…"
+		_hdr_trk_btn.theme_type_variation = ""
+		_hdr_trk_btn.tooltip_text = "トラッキング用のシステムを入れています"
+	elif not installed:
+		_hdr_trk_btn.text = "⬇ トラッキングをインストール"
+		_hdr_trk_btn.theme_type_variation = "AccentButton"
+		_hdr_trk_btn.tooltip_text = "トラッキング用のシステムがまだ入っていません。押すと、インストールの案内を出します"
+	else:
+		_hdr_trk_btn.text = "▶ トラッキング開始"
+		_hdr_trk_btn.theme_type_variation = "AccentButton"
+		_hdr_trk_btn.tooltip_text = "Web カメラでのトラッキングを始めます"
 
 
 # ---- Tracking テスト互換転送メソッド
