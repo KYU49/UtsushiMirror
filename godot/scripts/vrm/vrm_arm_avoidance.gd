@@ -14,6 +14,10 @@ var _smooth_ua_push: Dictionary = {
 	"left": Vector3.ZERO,
 	"right": Vector3.ZERO,
 }
+var _smooth_tip_push: Dictionary = {
+	"left": Vector3.ZERO,
+	"right": Vector3.ZERO,
+}
 
 
 func reset() -> void:
@@ -21,6 +25,8 @@ func reset() -> void:
 	_smooth_push["right"] = Vector3.ZERO
 	_smooth_ua_push["left"] = Vector3.ZERO
 	_smooth_ua_push["right"] = Vector3.ZERO
+	_smooth_tip_push["left"] = Vector3.ZERO
+	_smooth_tip_push["right"] = Vector3.ZERO
 
 
 func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, dt: float) -> void:
@@ -125,6 +131,7 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 		if not (composed_bones.has(up_name) or composed_bones.has(lo_name)):
 			_smooth_push[side] = Vector3.ZERO
 			_smooth_ua_push[side] = Vector3.ZERO
+			_smooth_tip_push[side] = Vector3.ZERO
 			continue
 
 		var sign_v: float = 1.0 if side == "left" else -1.0
@@ -175,9 +182,10 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 		var cur_tip_vec: Vector3 = palm_tip - wr_pos
 		var probe_wr: Vector3 = wr_pos + push
 		var pre_tip_clear := Vector3.ZERO
+		var prev_tip_clear: Vector3 = _smooth_tip_push.get(side, Vector3.ZERO)
 		if cur_tip_vec.length_squared() > 1e-5:
 			pre_tip_clear = _resolve_obstacles(probe_wr + cur_tip_vec, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
-		if push.length_squared() < 1e-8 and ua_push.length_squared() < 1e-8 and pre_tip_clear.length_squared() < 1e-8:
+		if push.length_squared() < 1e-8 and ua_push.length_squared() < 1e-8 and pre_tip_clear.length_squared() < 1e-8 and prev_tip_clear.length_squared() < 1e-8:
 			continue
 
 		var q_parent: Quaternion = q_chest
@@ -258,16 +266,25 @@ func apply(runtime: Node3D, humanoid, spring_bone, composed_bones: Dictionary, d
 			humanoid.set_normalized_bone_rotation(up_name, new_up_local)
 			humanoid.set_normalized_bone_rotation(lo_name, new_lo_local)
 
-		# 指先が依然として体幹/胸/頭に刺さる場合は、手首を外向き・前向きに沿わせて逃がす
+		# 指先が依然として体幹/胸/頭に刺さる場合は、手首を外向き・前向きに沿わせて滑らかに逃がす (最大35°で過剰変形を防ぐ)
 		var final_hd_world: Quaternion = q_hd_world
+		var raw_tip_clear := Vector3.ZERO
 		if cur_tip_vec.length_squared() > 1e-5:
-			var tip_clear: Vector3 = _resolve_obstacles(new_wr + cur_tip_vec, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
-			if tip_clear.length_squared() > 1e-6:
-				var desired_tip_vec: Vector3 = cur_tip_vec + tip_clear
-				if desired_tip_vec.length_squared() > 1e-6:
-					var dq_h: Quaternion = _shortest_arc(cur_tip_vec, desired_tip_vec)
-					final_hd_world = (dq_h * q_hd_world).normalized()
-					has_hand_comp = true
+			raw_tip_clear = _resolve_obstacles(new_wr + cur_tip_vec, hand_pad * 0.75, obstacles, torso_fwd, torso_left, sign_v)
+		var tip_clear: Vector3 = prev_tip_clear.lerp(raw_tip_clear, alpha)
+		_smooth_tip_push[side] = tip_clear
+		if cur_tip_vec.length_squared() > 1e-5 and tip_clear.length_squared() > 1e-6:
+			var desired_tip_vec: Vector3 = cur_tip_vec + tip_clear
+			if desired_tip_vec.length_squared() > 1e-6:
+				var dq_h: Quaternion = _shortest_arc(cur_tip_vec, desired_tip_vec)
+				if dq_h.w < 0.0:
+					dq_h = -dq_h
+				var max_tip_ang: float = deg_to_rad(35.0)
+				var tip_ang: float = dq_h.get_angle()
+				if tip_ang > max_tip_ang:
+					dq_h = Quaternion.IDENTITY.slerp(dq_h, max_tip_ang / tip_ang).normalized()
+				final_hd_world = (dq_h * q_hd_world).normalized()
+				has_hand_comp = true
 		if has_hand_comp:
 			var new_hd_local: Quaternion = (new_lo_world.inverse() * final_hd_world).normalized()
 			composed_bones[hd_name] = new_hd_local

@@ -582,5 +582,85 @@ r_gh = sv_gh.solve(pose_world=bw_none, pose_image=im_none,
 ok &= check("同ラベルの近接ゴースト手があっても右手のみに割り当てる",
             "rightHand" in r_gh.bones and "leftHand" not in r_gh.bones and "leftUpperArm" not in r_gh.bones)
 
+# ---- 画面下端手首・傾いたカメラ補正・離脱後の再進入反転
+# 8) 手首が画面下端 (y=0.995) でも掌中心 (y=0.78) が画角内なら手と指を反映し、手の甲向きが正しく反映される
+sv_edge = Solver(SolverConfig(mirror=True, smooth=0.0, hand_edge=0.03))
+im_edge = img_pose(0.5)
+im_edge[11] = L(x=0.60, y=0.93, z=0.0, visibility=0.8)  # mirror=True -> model right shoulder at _pi=0.40
+im_edge[12] = L(x=0.40, y=0.93, z=0.0, visibility=0.8)
+im_edge[15] = L(x=0.65, y=0.995, z=0.0, visibility=0.8)
+im_edge[13] = L(x=0.65, y=0.95, z=0.0, visibility=0.8)
+im_edge[16] = L(x=0.35, y=1.10, z=0.0, visibility=0.05)
+im_edge[14] = L(x=0.35, y=1.05, z=0.0, visibility=0.05)
+h_img_edge = [L(x=0.65, y=0.995, z=0.0) for _ in range(21)]
+h_img_edge[9] = L(x=0.65, y=0.78, z=0.0)
+# mirror=True で本人の左手手の甲がカメラ向き -> raw pinky->index = (+0.2, 0, 0), 指上 (0, -1, 0)
+pts_back = [L(x=0.0, y=0.0, z=0.0) for _ in range(21)]
+pts_back[9] = L(x=0.0, y=-1.0, z=0.0)
+pts_back[5] = L(x=0.2, y=-0.9, z=0.0)
+pts_back[17] = L(x=-0.2, y=-0.9, z=0.0)
+for ki, kv in ((1, (0.2, -0.3, 0.0)), (2, (0.35, -0.5, 0.0)), (3, (0.5, -0.7, 0.0)), (4, (0.6, -0.85, 0.0))):
+    pts_back[ki] = L(x=kv[0], y=kv[1], z=kv[2])
+bw_edge = body(True)
+bw_edge[14] = L(x=-0.5, y=-0.5, z=0.0, visibility=0.05)
+bw_edge[16] = L(x=-0.5, y=-0.8, z=0.0, visibility=0.05)
+r_edge = sv_edge.solve(pose_world=bw_edge, pose_image=im_edge, hands=[(h_img_edge, pts_back, ("Left", 0.92))], t=0.0)
+ok &= check("手首が画面下端(y=0.995)でも掌が画角内なら右手が反映される", "rightHand" in r_edge.bones)
+if "rightHand" in r_edge.bones:
+    q_rw = q_mul(q_mul(r_edge.bones["chest"], r_edge.bones["spine"]),
+                 q_mul(r_edge.bones["rightShoulder"], q_mul(r_edge.bones["rightUpperArm"],
+                 q_mul(r_edge.bones["rightLowerArm"], r_edge.bones["rightHand"]))))
+    palm_w = q_rot(q_rw, np.array([0.0, -1.0, 0.0]))
+    thumb_side_w = q_rot(q_rw, np.array([0.0, 0.0, 1.0]))
+    ok &= check("手の甲をカメラに向けたとき掌(-Y)が奥(-Z)、親指側が外側(-X)になる", palm_w[2] < -0.7 and thumb_side_w[0] < -0.7)
+
+# 9) 掌ごと画面左端外 (p2d.x=0.01) のときは依然として除外される
+h_img_oob = [L(x=0.99, y=0.50, z=0.0) for _ in range(21)]  # mirror=True -> _pi=0.01 < 0.03
+h_img_oob[9] = L(x=0.99, y=0.40, z=0.0)
+r_oob = Solver(SolverConfig(mirror=True, smooth=0.0, hand_edge=0.03)).solve(
+    pose_world=bw_edge, pose_image=im_edge, hands=[(h_img_oob, pts_back, ("Left", 0.92))], t=0.0)
+ok &= check("掌ごと画面端外のときは従来どおり除外される", "rightHand" not in r_oob.bones and "leftHand" not in r_oob.bones)
+
+# 10) 体キャリブレーション(_inv0)で傾いたカメラでも手の向きが補正される
+sv_cal = Solver(SolverConfig(mirror=False, smooth=0.0, use_face=False))
+tilt = math.radians(25.0)
+q_tilt = q_axis_angle([1.0, 0.0, 0.0], tilt)  # カメラが25度ピッチで傾いている基準姿勢
+# MediaPipe ワールド座標に逆回転を与えて calib.body に傾いた姿勢を記録
+pts_tilted_body = [L(x=0, y=0, z=0, visibility=1.0) for _ in range(33)]
+for idx_b, v in ((11, [0.2, 0.5, 0.0]), (12, [-0.2, 0.5, 0.0]), (23, [0.1, 0.0, 0.0]), (24, [-0.1, 0.0, 0.0])):
+    vr = q_rot(q_tilt, np.array(v, dtype=float))
+    pts_tilted_body[idx_b] = L(x=vr[0], y=-vr[1], z=-vr[2], visibility=1.0)
+sv_cal.start_capture()
+for i in range(5):
+    sv_cal.solve(pose_world=pts_tilted_body, pose_image=img_pose(0.5), t=i / 30.0)
+cal_b = sv_cal.finish_capture()
+sv_cal._inv0 = np.array([-cal_b.body[0], -cal_b.body[1], -cal_b.body[2], cal_b.body[3]])
+# 傾いたカメラ座標内で「体の基準上方向」に沿った手を作る
+hand_tilted = flat_hand(q_mul(q_tilt, q_axis_angle([0.0, 0.0, 1.0], math.pi * 0.5)))
+res_cal = SolveResult()
+res_cal.bones["leftLowerArm"] = np.array([0.0, 0.0, 0.0, 1.0])
+res_cal.bones["__leftLowerArmWorld"] = np.array([0.0, 0.0, 0.0, 1.0])
+sv_cal._solve_one_hand("left", hand_tilted, res_cal)
+finger_cal = q_rot(res_cal.bones["leftHand"], np.array([1.0, 0.0, 0.0]))
+ok &= check("体キャリブレーション(_inv0)が手の向きにも効いて上向き(+Y)になる", finger_cal[1] > 0.95)
+
+# 11) 手が0.4秒以上画面から消えてから180度裏返って再登場しても即座に反映される
+sv_re = Solver(SolverConfig(mirror=False, smooth=0.0, arms_rest=False))
+im_re = pose_with_face()
+h_re = [L(x=0.60, y=0.65, z=0.0) for _ in range(21)]
+sv_re.solve(pose_world=body(True), pose_image=im_re,
+            hands=[(h_re, flat_hand(np.array([0.0, 0.0, 0.0, 1.0])), ("Right", 0.95))], t=0.0)
+sv_re.solve(pose_world=body(True), pose_image=im_re, hands=[], t=0.5)
+# 180度回転した手 (x 軸反転相当の y-flip -> [0, 1, 0, 0])
+r_re = sv_re.solve(pose_world=body(True), pose_image=im_re,
+                   hands=[(h_re, flat_hand(q_axis_angle([1.0, 0.0, 0.0], math.pi)), ("Right", 0.95))], t=0.55)
+q_lw_re = IDENT = np.array([0.0, 0.0, 0.0, 1.0])
+if "leftHand" in r_re.bones:
+    q_lw_re = q_mul(q_mul(r_re.bones["chest"], r_re.bones["spine"]),
+                    q_mul(r_re.bones["leftShoulder"], q_mul(r_re.bones["leftUpperArm"],
+                    q_mul(r_re.bones["leftLowerArm"], r_re.bones["leftHand"]))))
+ok &= check("手が一時離脱後に裏返って再登場しても初フレームで反映される",
+            "leftHand" in r_re.bones and q_rot(q_lw_re, np.array([0.0, 0.0, 1.0]))[2] < -0.7)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

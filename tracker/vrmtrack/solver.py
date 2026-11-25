@@ -317,6 +317,7 @@ class Solver:
         self._seen: dict[str, float] = {}
         self._prev_hand: dict[str, np.ndarray] = {}
         self._flip: dict[str, int] = {}
+        self._hand_seen_t: dict[str, float] = {}
         self._t_prev: float | None = None
         self._raw: dict = {}
         self._capture: dict | None = None
@@ -823,9 +824,11 @@ class Solver:
             img_lms, world_lms = item[0], item[1]
             hand_hl = item[2] if len(item) >= 3 else None
             h2d = self._pi(img_lms[0])
-            if e > 0 and not (e <= h2d[0] <= 1 - e and e <= h2d[1] <= 1 - e):
-                continue  # 画面の端の手は形が崩れやすい
             p2d = (h2d + self._pi(img_lms[9])) * 0.5
+            if e > 0 and not (e <= p2d[0] <= 1.0 - e and e <= p2d[1] <= 1.0 - e * 0.5):
+                continue  # 画面の端に掌ごと掛かる手は形が崩れやすい
+            if not (-0.06 <= h2d[0] <= 1.06 and -0.06 <= h2d[1] <= 1.15):
+                continue  # 手首が画面外へ大きく外挿されている場合は除外
             hl_label = str(hand_hl[0]) if (hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.55) else ""
             hl_score = float(hand_hl[1]) if (hand_hl is not None and len(hand_hl) >= 2) else 0.0
 
@@ -856,8 +859,8 @@ class Solver:
                 continue
             good.append(cand)
 
-        can_est = (cfg.arm_from_hand and self._chest_world is not None
-                   and min(self._vis(pose_image, ls), self._vis(pose_image, rs)) >= cfg.min_visibility)
+        can_est = (cfg.arm_from_hand and self._chest_world is not None and swa > 0.05
+                   and min(self._vis(pose_image, ls), self._vis(pose_image, rs)) >= cfg.min_visibility * 0.5)
 
         assigned: dict = {}  # 側 → (img_lms, world_lms, h2d, h2a, f_near)
         if not can_est:
@@ -976,8 +979,15 @@ class Solver:
                     self._good_pose_vec[side] = (self._pose_arm_vec[side][0], self._pose_arm_vec[side][1], self._t_now)
                 self._est_w[side] = 0.0
                 self._pose_trust[side] = max(0.0, self._pose_trust.get(side, 0.0) - trust_rate)
+                if (self._t_now - self._hand_seen_t.get(side, -1e9)) > 0.35:
+                    self._prev_hand.pop(side, None)
+                    self._flip[side] = 0
                 continue
 
+            if (self._t_now - self._hand_seen_t.get(side, -1e9)) > 0.35:
+                self._prev_hand.pop(side, None)
+                self._flip[side] = 0
+            self._hand_seen_t[side] = self._t_now
             img_lms, world_lms, h2d, h2a, f_near = assigned[side]
             pose_ok = f"__{side}LowerArmWorld" in res.bones and side in self._pose_arm_vec
             d_pw = float(np.linalg.norm(wrist2d[side] - h2d)) if pose_ok else max_d * 2.0
@@ -1075,6 +1085,8 @@ class Solver:
 
     def _solve_one_hand(self, side: str, wl, res: SolveResult) -> None:
         p = [self._pw(l) for l in wl]
+        if self._inv0 is not None:
+            p = [q_rot(self._inv0, v) for v in p]
         sign = 1.0 if side == "left" else -1.0
         # 掌の向き: 手首→中指付け根 = 指方向, 小指付け根→人差し指付け根 = 前 (+Z)
         meas = frame(p[9] - p[0], p[5] - p[17])

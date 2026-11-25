@@ -419,8 +419,18 @@ func update_live() -> void:
 		_status_lbl.add_theme_color_override("font_color", UiTheme.STATUS_WARN)
 	elif running:
 		var fps := float(st_d.get("fps", 0.0))
-		var det: Array = st_d.get("detected", [])
-		_status_lbl.text = "● 動作中  %.1f FPS  検出: %s" % [fps, ", ".join(det.map(func(x): return str(x))) if not det.is_empty() else "待機中"]
+		var det_parts: Array[String] = []
+		if bool(st_d.get("face", false)):
+			det_parts.append("顔")
+		if bool(st_d.get("pose", false)):
+			det_parts.append("体")
+		var h_cnt := int(st_d.get("hands", 0))
+		if h_cnt > 0:
+			det_parts.append("手(%d)" % h_cnt)
+		if det_parts.is_empty():
+			for x in st_d.get("detected", []):
+				det_parts.append(str(x))
+		_status_lbl.text = "● 動作中  %.1f FPS  検出: %s" % [fps, "・".join(det_parts) if not det_parts.is_empty() else "待機中"]
 		_status_lbl.add_theme_color_override("font_color", UiTheme.STATUS_OK)
 	else:
 		_status_lbl.text = "● 停止中"
