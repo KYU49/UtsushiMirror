@@ -99,6 +99,30 @@ func _check_alpha() -> void:
 	_check("model stays opaque with effect", center.a > 0.9)
 	img.save_png(_out.path_join("40_output_alpha_anime.png"))
 	_check("effect layer active", _m.post_effects.is_active())
+	# アニメ風は、モデルの陰影も一緒に変え、別の画風に替えると陰影を元に戻す
+	_check("アニメ風で陰影も変わる", is_equal_approx(float(_m.post_effects.shade.shade_strength), 1.56)
+		and is_equal_approx(float(_m.post_effects.shade.shade_shift), -0.4))
+	_m.apply_effects({"style": "drama"})
+	_check("別の画風で陰影が戻る", is_equal_approx(float(_m.post_effects.shade.shade_strength), 1.0)
+		and is_equal_approx(float(_m.post_effects.shade.shade_shift), 0.0))
+	_m.apply_effects({"style": "none", "shade_strength": 1.6})
+	_m.apply_effects({"style": "drama"})
+	_check("自分で変えた陰影は、画風を替えても残る", is_equal_approx(float(_m.post_effects.shade.shade_strength), 1.6))
+	_m.apply_effects({"style": "none", "shade_strength": 1.0})
+	_m.apply_effects({"style": "anime"})
+	var reg_path := OS.get_environment("APPDATA").path_join("UtsushiMirror/presets/shaders/アニメ風.umshader")
+	if FileAccess.file_exists(reg_path):
+		var reg: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(reg_path)).effects
+		var cur: Dictionary = _m.post_effects.to_dict()
+		var same := true
+		for k in reg.keys():
+			if k in ["style"] or not cur.has(k):
+				continue
+			if typeof(reg[k]) == TYPE_STRING:
+				same = same and str(reg[k]).to_lower() == str(cur[k]).to_lower()
+			elif k != "grain_fps":
+				same = same and absf(float(reg[k]) - float(cur[k])) < 0.0001
+		_check("アニメ風が登録した値と同じ", same)
 	# シェーダー設定の書き出し・読み込み
 	var path := OS.get_temp_dir().path_join("vv_shader_io_test.json")
 	_m.apply_effects({"style": "anime", "kuwahara": 1.5, "shade_strength": 1.6})

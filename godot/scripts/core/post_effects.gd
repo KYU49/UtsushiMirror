@@ -24,12 +24,15 @@ const NEUTRAL := {
 	"flicker": 0.0, "jitter": 0.0, "scanlines": 0.0, "vhs": 0.0, "letterbox": 0.0,
 }
 
-## プリセット: [表示名, 説明, NEUTRAL との差分]
+## プリセット: [表示名, 説明, NEUTRAL との差分, (あれば) モデルの陰影 (SHADE_DEFAULTS との差分)]
 const PRESETS := {
 	"none": ["なし", "効果を掛けません。", {}],
-	"anime": ["アニメ風", "セル画のように明るさを段にし、細い輪郭線を足して色を鮮やかに。明るい所はふんわり光らせます。", {
-		"saturation": 1.15, "vibrance": 0.2, "contrast": 1.04, "posterize": 4.0, "edge": 0.25, "edge_threshold": 0.15,
-		"kuwahara": 0.5, "diffusion": 0.12, "diffusion_threshold": 0.8, "highlight_roll": 0.08, "shadow_color": "#6a74b0", "shadow_amount": 0.18}],
+	"anime": ["アニメ風", "セル画のように明るさを少ない段にまとめ、筆で塗ったような平らな面に細い輪郭線を足します。モデルの影を広く濃くし、落ち着いた色に、影は青緑・明るい所は暖かい色に寄せます。", {
+		"contrast": 0.98, "saturation": 0.74, "vibrance": 0.42, "temperature": 0.16, "tint": 0.1, "black_lift": 0.02,
+		"shadow_color": "#3f8f98", "shadow_amount": 0.32, "highlight_color": "#bfb191", "highlight_amount": 0.22,
+		"posterize": 2.0, "edge": 0.18, "edge_threshold": 0.235, "kuwahara": 1.0, "diffusion_threshold": 0.7,
+		"halation": 0.06, "sharpen": 0.16},
+		{"shade_shift": -0.4, "shade_toony": -0.38, "shade_strength": 1.56}],
 	"drama": ["ドラマ風", "ドラマ撮影で使う拡散フィルター (Black Pro-Mist) のような柔らかいにじみ。黒を少し浮かせ、肌が映える暖かい色味に。", {
 		"diffusion": 0.38, "diffusion_threshold": 0.5, "halation": 0.06, "glow": 0.12, "contrast": 0.92, "black_lift": 0.035,
 		"highlight_roll": 0.12, "saturation": 0.92, "temperature": 0.12, "highlight_color": "#ffd2a8", "highlight_amount": 0.18,
@@ -64,6 +67,8 @@ const SHADE_DEFAULTS := {
 	"shade_tint": "#ffffff",  # 影の色味
 }
 var shade: Dictionary = SHADE_DEFAULTS.duplicate()
+## 今の陰影が、画風 (プリセット) から入れたものか。別の画風に替えたら元に戻す
+var _shade_from_preset := false
 
 var _layers: Array[CanvasLayer] = []
 ## [{layer: CanvasLayer, vp: Viewport, rect_mix: ColorRect, mat_mix: ShaderMaterial, rect_mul: ColorRect, mat_mul: ShaderMaterial, rect_add: ColorRect, mat_add: ShaderMaterial}]
@@ -103,6 +108,14 @@ func apply_preset(name: String) -> void:
 	style = name
 	params = NEUTRAL.duplicate()
 	params.merge(PRESETS[name][2], true)
+	var entry: Array = PRESETS[name]
+	if entry.size() > 3:
+		shade = SHADE_DEFAULTS.duplicate()
+		shade.merge(entry[3], true)
+		_shade_from_preset = true
+	elif _shade_from_preset:
+		shade = SHADE_DEFAULTS.duplicate()
+		_shade_from_preset = false
 	_apply()
 
 
