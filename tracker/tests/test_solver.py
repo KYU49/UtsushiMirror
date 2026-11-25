@@ -763,5 +763,74 @@ r_fl1 = sv_fl.solve(pose_world=bw_fl, pose_image=im_fl, hands=[(h_fl, pts_back, 
 ok &= check("顎前片手のhandednessちらつきでも反対腕に飛ばない",
             "rightHand" in r_fl0.bones and "rightHand" in r_fl1.bones and "leftHand" not in r_fl1.bones)
 
+# 16) クローズアップで肩が画面下外(y=1.10, vis=0.10)・片側Pose肘欠損でも、挙げた両手が両方とも反映される
+sv_cu = Solver(SolverConfig(mirror=True, smooth=0.0, stabilize=0.0))
+sv_cu.aspect = 16.0 / 9.0
+im_cu = [L(x=0.5, y=0.5, z=0.0, visibility=1.0) for _ in range(33)]
+im_cu[0] = L(x=0.50, y=0.52, z=0.0, visibility=1.0)
+im_cu[11] = L(x=0.86, y=1.10, z=0.0, visibility=0.10)  # mirror=True -> モデル右肩
+im_cu[12] = L(x=0.14, y=1.10, z=0.0, visibility=0.10)  # mirror=True -> モデル左肩
+im_cu[13] = L(x=0.84, y=1.02, z=0.0, visibility=0.80)
+im_cu[15] = L(x=0.78, y=0.88, z=0.0, visibility=0.90)  # モデル右手Poseは映っている
+im_cu[14] = L(x=0.16, y=1.20, z=0.0, visibility=0.05)  # モデル左腕Poseは画角外
+im_cu[16] = L(x=0.22, y=1.22, z=0.0, visibility=0.05)
+bw_cu = body(True)
+bw_cu[14] = L(x=-0.2, y=-0.2, z=0.0, visibility=0.05)
+bw_cu[16] = L(x=-0.2, y=0.05, z=0.0, visibility=0.05)
+h_cu_r = [L(x=0.78, y=0.88, z=0.0) for _ in range(21)]
+h_cu_r[9] = L(x=0.77, y=0.72, z=0.0)
+h_cu_l = [L(x=0.20, y=0.88, z=0.0) for _ in range(21)]
+h_cu_l[9] = L(x=0.21, y=0.72, z=0.0)
+r_cu = sv_cu.solve(pose_world=bw_cu, pose_image=im_cu,
+                   hands=[(h_cu_r, pts_back, ("Left", 0.90)), (h_cu_l, pts_back, ("Right", 0.90))], t=0.0)
+ok &= check("クローズアップ両手で肩低vis・片腕Pose欠損でも両手・両腕が反映される",
+            "leftHand" in r_cu.bones and "rightHand" in r_cu.bones
+            and "leftUpperArm" in r_cu.bones and "rightUpperArm" in r_cu.bones)
+
+# 17) 同クローズアップ条件で両腕Pose欠損＆両手のhandednessが一時的に同ラベルでも2本とも維持される
+bw_cu2 = body(True)
+for k in (13, 14, 15, 16):
+    bw_cu2[k] = L(x=bw_cu2[k].x, y=bw_cu2[k].y, z=0.0, visibility=0.05)
+im_cu2 = list(im_cu)
+for k in (13, 14, 15, 16):
+    im_cu2[k] = L(x=im_cu2[k].x, y=im_cu2[k].y, z=0.0, visibility=0.05)
+r_cu2 = sv_cu.solve(pose_world=bw_cu2, pose_image=im_cu2,
+                    hands=[(h_cu_r, pts_back, ("Left", 0.90)), (h_cu_l, pts_back, ("Left", 0.85))], t=0.1)
+ok &= check("クローズアップで両腕Pose欠損＆同handednessでも離れた両手が両方維持される",
+            "leftHand" in r_cu2.bones and "rightHand" in r_cu2.bones)
+
+# 18) 肘が画面下外 (arm_ok=False) でも Pose 手首が右手上に映っていれば誤 handedness に負けず正しい腕へ付く
+sv_pw = Solver(SolverConfig(mirror=True, smooth=0.0, stabilize=0.0))
+sv_pw.aspect = 16.0 / 9.0
+im_pw = pose_with_face()
+im_pw[11] = L(x=0.72, y=0.92, z=0.0, visibility=0.8)  # mirror=True -> モデル右肩
+im_pw[12] = L(x=0.28, y=0.92, z=0.0, visibility=0.8)  # mirror=True -> モデル左肩
+im_pw[14] = L(x=0.22, y=1.08, z=0.0, visibility=0.05) # モデル左肘は画角外
+im_pw[16] = L(x=0.28, y=0.94, z=0.0, visibility=0.85) # モデル左手首 Pose は画面下端手上で可視 (_pi=0.72)
+im_pw[13] = L(x=0.76, y=1.10, z=0.0, visibility=0.05)
+im_pw[15] = L(x=0.72, y=1.15, z=0.0, visibility=0.05) # モデル右手首は画面外
+bw_pw = body(True)
+for k_off in (13, 14, 15, 16):
+    bw_pw[k_off] = L(x=bw_pw[k_off].x, y=bw_pw[k_off].y, z=0.0, visibility=0.05)
+h_pw = [L(x=0.28, y=0.94, z=0.0) for _ in range(21)]
+h_pw[9] = L(x=0.32, y=0.76, z=0.0)
+r_pw = sv_pw.solve(pose_world=bw_pw, pose_image=im_pw, hands=[(h_pw, pts_back, ("Right", 0.92))], t=0.0)
+ok &= check("肘が画角外でもPose手首が一致する腕(左手)へ正しく付く",
+            "leftHand" in r_pw.bones and "rightHand" not in r_pw.bones)
+
+# 19) 肘もPose手首も欠損中の左側手で、ノイズ水準(0.66)の誤handednessに負けて反対腕にならない
+im_ns = pose_with_face()
+im_ns[11] = L(x=0.72, y=0.92, z=0.0, visibility=0.8)
+im_ns[12] = L(x=0.28, y=0.92, z=0.0, visibility=0.8)
+for k_off in (13, 14, 15, 16):
+    im_ns[k_off] = L(x=0.5, y=1.15, z=0.0, visibility=0.05)
+h_ns = [L(x=0.25, y=0.78, z=0.0) for _ in range(21)]  # _pi=0.75 (モデル左側)
+h_ns[9] = L(x=0.26, y=0.62, z=0.0)
+sv_ns = Solver(SolverConfig(mirror=True, smooth=0.0, stabilize=0.0))
+sv_ns.aspect = 16.0 / 9.0
+r_ns = sv_ns.solve(pose_world=bw_pw, pose_image=im_ns, hands=[(h_ns, pts_back, ("Right", 0.66))], t=0.0)
+ok &= check("ノイズ水準(0.66)の誤handednessで反対側の腕へ裏返らない",
+            "leftHand" in r_ns.bones and "rightHand" not in r_ns.bones)
+
 print("ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

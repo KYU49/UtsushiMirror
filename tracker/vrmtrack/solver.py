@@ -809,21 +809,38 @@ class Solver:
         lw, rw = self._side(P_L_WR, P_R_WR)
         wrist2d = {"left": self._pi(pose_image[lw]), "right": self._pi(pose_image[rw])}
         ls, rs = self._side(P_L_SH, P_R_SH)
-        sw = float(np.linalg.norm(self._pi(pose_image[ls]) - self._pi(pose_image[rs])))
-        max_d = max(0.08, min(0.25, sw * 0.7))
         sh2d = {"left": self._pa(pose_image[ls]), "right": self._pa(pose_image[rs])}
+        swa_raw = float(np.linalg.norm(sh2d["left"] - sh2d["right"]))
+        sh_mid_raw_y = (sh2d["left"][1] + sh2d["right"][1]) * 0.5
+        sh_vis_min = min(self._vis(pose_image, ls), self._vis(pose_image, rs))
+        nose_ok = len(pose_image) > P_NOSE and self._vis(pose_image, P_NOSE) >= cfg.min_visibility
+        nose_a = self._pa(pose_image[P_NOSE]) if nose_ok else None
+        if sh_vis_min < cfg.min_visibility * 0.5 and nose_a is not None and (swa_raw < 0.10 or sh_mid_raw_y <= nose_a[1]):
+            # クローズアップ等で肩が画面外に落ち位置が潰れた場合、顔位置と耳/目幅から肩位置を補う
+            face_w = 0.28
+            if len(pose_image) > P_R_EAR:
+                ew = float(np.linalg.norm(self._pa(pose_image[P_L_EAR]) - self._pa(pose_image[P_R_EAR])))
+                if ew > 0.04:
+                    face_w = max(0.18, ew * 2.1)
+            sh_y_est = min(1.18, float(nose_a[1]) + face_w * 0.72)
+            sh2d = {
+                "left": np.array([float(nose_a[0]) + face_w * 0.5, sh_y_est], dtype=float),
+                "right": np.array([float(nose_a[0]) - face_w * 0.5, sh_y_est], dtype=float),
+            }
+            sw = face_w / max(0.5, self.aspect)
+        else:
+            sw = float(np.linalg.norm(self._pi(pose_image[ls]) - self._pi(pose_image[rs])))
+        max_d = max(0.08, min(0.25, sw * 0.7))
         swa = max(0.03, float(np.linalg.norm(sh2d["left"] - sh2d["right"])))
         sh_mid_a = (sh2d["left"] + sh2d["right"]) * 0.5
         face_c = sh_mid_a + np.array([0.0, -swa * 0.72])
-        if len(pose_image) > P_NOSE and self._vis(pose_image, P_NOSE) >= cfg.min_visibility:
-            nose_a = self._pa(pose_image[P_NOSE])
-            if nose_a[1] < sh_mid_a[1]:
-                face_c = nose_a
+        if nose_a is not None and nose_a[1] < sh_mid_a[1]:
+            face_c = nose_a
         face_r = max(0.06, swa * 0.55)
 
         e = cfg.hand_edge
         dup_r = max(0.06, sw * 0.35)
-        dup_same_hl_r = max(0.14, sw * 0.75)
+        dup_same_hl_r = min(0.22, max(0.12, sw * 0.55))
         good: list = []  # [(img_lms, world_lms, h2d, p2d, h2a, hand_hl, f_near)]
         for item in hands:
             img_lms, world_lms = item[0], item[1]
@@ -865,8 +882,12 @@ class Solver:
                 continue
             good.append(cand)
 
-        can_est = (cfg.arm_from_hand and self._chest_world is not None and swa > 0.05
-                   and min(self._vis(pose_image, ls), self._vis(pose_image, rs)) >= cfg.min_visibility * 0.5)
+        sh_mid_y = (sh2d["left"][1] + sh2d["right"][1]) * 0.5
+        sh_valid = (
+            sh_vis_min >= cfg.min_visibility * 0.2
+            or (swa >= 0.12 and sh_mid_y > face_c[1])
+        )
+        can_est = cfg.arm_from_hand and self._chest_world is not None and swa > 0.05 and sh_valid
 
         assigned: dict = {}  # 側 → (img_lms, world_lms, h2d, h2a, f_near)
         if not can_est:
@@ -882,6 +903,17 @@ class Solver:
                     assigned[side] = (img_lms, world_lms, h2d, h2a, f_near)
                     used.add(idx)
         elif good:
+            pose_wrist_ok = {
+                "left": (
+                    "__leftLowerArmWorld" in res.bones
+                    or (self._vis(pose_image, lw) >= cfg.min_visibility * 0.45 and self._in_frame(pose_image[lw], 0.12))
+                ),
+                "right": (
+                    "__rightLowerArmWorld" in res.bones
+                    or (self._vis(pose_image, rw) >= cfg.min_visibility * 0.45 and self._in_frame(pose_image[rw], 0.12))
+                ),
+            }
+
             def assign_cost(entry, side: str) -> float:
                 _il, _wl, h2d, _p2d, h2a, hand_hl, f_near = entry
                 cost = 0.0
@@ -890,23 +922,24 @@ class Solver:
                 if prev_e is not None and (self._t_now - prev_e[1]) < 0.5:
                     fade = 1.0 - max(0.0, self._t_now - prev_e[1]) / 0.5
                     d_norm = float(np.linalg.norm(h2a - prev_e[0])) / swa
-                    cost += base_temp + fade * (min(1.4, 1.4 * d_norm) - base_temp)
+                    cost += base_temp + fade * (min(1.4, 0.95 * d_norm) - base_temp)
                 else:
                     cost += base_temp
                 pose_match = {
-                    s: (f"__{s}LowerArmWorld" in res.bones and float(np.linalg.norm(wrist2d[s] - h2d)) <= max_d * 0.85)
+                    s: (pose_wrist_ok[s] and float(np.linalg.norm(wrist2d[s] - h2d)) <= max_d * 0.90)
                     for s in ("left", "right")
                 }
                 has_pose_anchor = pose_match["left"] or pose_match["right"]
-                if hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.55:
+                if hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.72:
                     label = str(hand_hl[0])
                     if label in ("Left", "Right"):
                         # 非反転入力前提: MediaPipe の "Left" = 本人の物理右手
                         exp_side = ("left" if label == "Left" else "right") if cfg.mirror else ("right" if label == "Left" else "left")
                         if exp_side != side:
-                            cost += (0.38 if has_pose_anchor else 0.75) * float(hand_hl[1])
+                            hl_conf = _ramp(float(hand_hl[1]), 0.65, 0.98)
+                            cost += (0.28 if has_pose_anchor else 0.70) * hl_conf
                 w_pw = 1.0 - 0.20 * f_near
-                if f"__{side}LowerArmWorld" in res.bones:
+                if pose_wrist_ok[side]:
                     d_pw = float(np.linalg.norm(wrist2d[side] - h2d))
                     cost += w_pw * 1.1 * min(1.5, d_pw / max(0.05, max_d))
                 else:
@@ -914,23 +947,23 @@ class Solver:
                     cost += w_pw * 1.1 * 1.15
                 side_sgn = 1.0 if side == "left" else -1.0
                 lat_from_mid = side_sgn * float(h2a[0] - sh_mid_a[0]) / swa  # 正 = 自側, 負 = 反対側
-                if lat_from_mid < -0.15 and not pose_match[side]:
-                    cost += min(0.8, (-lat_from_mid - 0.15) * 1.1)
+                if lat_from_mid < -0.05 and not pose_match[side]:
+                    cost += min(0.95, (-lat_from_mid - 0.05) * 1.35)
                 cost += 0.25 * float(np.linalg.norm(sh2d[side] - h2a)) / swa
                 return cost
 
             def steals_other_pose(entry, target_side: str) -> bool:
                 _il, _wl, h2d_pt, _p2d, h2a_pt, hand_hl, _fn = entry
                 other = "right" if target_side == "left" else "left"
-                if f"__{target_side}LowerArmWorld" in res.bones or f"__{other}LowerArmWorld" not in res.bones:
+                if pose_wrist_ok[target_side] or not pose_wrist_ok[other]:
                     return False
                 d_other = float(np.linalg.norm(wrist2d[other] - h2d_pt))
                 if d_other > max_d * 1.1:
                     return False
-                # 相手の Pose 手首がすぐ近くにあり、かつ手も相手側の半身にあるなら奪取禁止
+                # 相手の Pose 手首がすぐ近くにあり、かつ手も相手側の半身にある (または直上一致) なら奪取禁止
                 other_sgn = 1.0 if other == "left" else -1.0
                 on_other_side = other_sgn * float(h2a_pt[0] - sh_mid_a[0]) > 0.08 * swa
-                if d_other <= max_d * 0.75 and on_other_side:
+                if (d_other <= max_d * 0.75 and on_other_side) or d_other <= max_d * 0.35:
                     return True
                 # 正中線越え中の継続追跡のみ例外許可 (距離も近いこと: 下げた直後の反対手は除外)
                 prev_t = self._last_hand2d.get(target_side)
@@ -939,7 +972,8 @@ class Solver:
                     and (self._t_now - prev_t[1]) < 0.35
                     and float(np.linalg.norm(h2a_pt - prev_t[0])) < swa * 0.70
                 )
-                if tracked_near and hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= 0.75:
+                hl_req = 0.85 if d_other <= max_d * 0.55 else 0.75
+                if tracked_near and hand_hl is not None and len(hand_hl) >= 2 and float(hand_hl[1]) >= hl_req:
                     lbl = str(hand_hl[0])
                     if lbl in ("Left", "Right"):
                         exp_s = ("left" if lbl == "Left" else "right") if cfg.mirror else ("right" if lbl == "Left" else "left")
@@ -977,7 +1011,7 @@ class Solver:
                     if steals_other_pose(pool[i], "left"):
                         continue
                     c_l = assign_cost(pool[i], "left")
-                    if c_l >= 2.3:
+                    if c_l >= 2.85:
                         continue
                     for j in range(len(pool)):
                         if i == j:
@@ -985,14 +1019,19 @@ class Solver:
                         if steals_other_pose(pool[j], "right"):
                             continue
                         c_r = assign_cost(pool[j], "right")
-                        if c_r >= 2.3:
+                        if c_r >= 2.85:
                             continue
                         tot = c_l + c_r
                         if tot < best_pair_c:
                             best_pair_c = tot
                             best_pair = (i, j)
 
-                if best_pair is not None and best_pair_c <= best_single_c + 1.65:
+                pair_ok = False
+                if best_pair is not None:
+                    pair_sep = float(np.linalg.norm(pool[best_pair[0]][4] - pool[best_pair[1]][4]))
+                    pair_margin = 2.75 if pair_sep >= swa * 0.45 else 1.75
+                    pair_ok = best_pair_c <= best_single_c + pair_margin
+                if pair_ok:
                     il0, wl0, h2d0, _p0, h2a0, _hl0, fn0 = pool[best_pair[0]]
                     il1, wl1, h2d1, _p1, h2a1, _hl1, fn1 = pool[best_pair[1]]
                     assigned["left"] = (il0, wl0, h2d0, h2a0, fn0)
