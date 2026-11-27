@@ -144,6 +144,8 @@ func bind_controller(ctrl) -> void:
 				controller.tracking.cameras_refreshed.connect(_on_cameras_refreshed)
 			if not controller.tracking.installation_finished.is_connected(_on_tracking_installed):
 				controller.tracking.installation_finished.connect(_on_tracking_installed)
+		if controller.ffmpeg != null and not controller.ffmpeg.installation_finished.is_connected(_on_ffmpeg_installed):
+			controller.ffmpeg.installation_finished.connect(_on_ffmpeg_installed)
 		if controller.current_vrm != null and _tab_expr != null:
 			_tab_expr.on_model_loaded(controller.current_vrm.get_model_info())
 	_refresh_recent_settings()
@@ -462,6 +464,8 @@ func _ensure_built() -> void:
 			_tab_tracking.update_live()
 		elif _active_tab_id == "API/Config" and _tab_api != null:
 			_tab_api.update_live()
+		elif _active_tab_id == "Output" and _tab_handlers.has("Output"):
+			_tab_handlers["Output"].update_live()
 	)
 	add_child(_trk_timer)
 
@@ -494,7 +498,7 @@ func _update_active_polling() -> void:
 	if _trk_timer == null:
 		return
 	var active_win := visible or DisplayServer.get_name() == "headless"
-	if active_win and (_active_tab_id == "Tracking" or _active_tab_id == "API/Config"):
+	if active_win and _active_tab_id in ["Tracking", "API/Config", "Output"]:
 		if _trk_timer.is_stopped():
 			_trk_timer.start()
 	else:
@@ -538,6 +542,11 @@ func _on_model_loaded(info: Dictionary) -> void:
 func _on_cameras_refreshed(cams: Array) -> void:
 	if _tab_tracking != null:
 		_tab_tracking.on_cameras_refreshed(cams)
+
+
+func _on_ffmpeg_installed(ok: bool) -> void:
+	if _tab_handlers.has("Output"):
+		_tab_handlers["Output"].on_ffmpeg_installed(ok)
 
 
 func _on_tracking_installed(ok: bool) -> void:

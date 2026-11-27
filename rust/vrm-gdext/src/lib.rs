@@ -1,3 +1,4 @@
+pub mod ffmpeg;
 pub mod lipsync;
 pub mod osc_receiver;
 pub mod osc_sender;
@@ -61,6 +62,24 @@ impl INode for VrmBridge {
 
 #[godot_api]
 impl VrmBridge {
+    /// アプリのフォルダを教える (ffmpeg を toolsfmpeg から探すため)
+    #[func]
+    pub fn set_ffmpeg_app_dir(&self, dir: GString) {
+        ffmpeg::set_app_dir(&dir.to_string());
+    }
+
+    /// FFmpeg が使えるか。{available, path, source ("env" / "app" / "path" / ""), app_path (アプリが入れる場所)}
+    #[func]
+    pub fn ffmpeg_status(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let found = ffmpeg::resolve();
+        d.set("available", found.is_some());
+        d.set("path", found.as_ref().map(|(p, _)| p.to_string_lossy().to_string()).unwrap_or_default());
+        d.set("source", found.as_ref().map(|(_, s)| *s).unwrap_or(""));
+        d.set("app_path", ffmpeg::app_local_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default());
+        d
+    }
+
     #[func]
     pub fn start_servers(&mut self, ws_port: i32, osc_port: i32) -> bool {
         self.stop_servers();

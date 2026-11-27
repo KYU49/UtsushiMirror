@@ -1,6 +1,6 @@
 use std::io::Write;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::JoinHandle;
 
@@ -42,7 +42,7 @@ impl FfmpegRecorder {
         format: RecordFormat,
         audio_path: Option<&str>,
     ) -> Result<Self, String> {
-        let mut child = spawn_ffmpeg(output_path, width, height, fps, format, audio_path)?;
+        let mut child = spawn_ffmpeg(output_path, width, height, fps, format, audio_path, true)?;
         let mut stdin = child
             .stdin
             .take()
@@ -91,7 +91,7 @@ impl FfmpegRecorder {
         format: RecordFormat,
         audio_path: Option<&str>,
     ) -> Result<Self, String> {
-        let mut child = spawn_ffmpeg(output_path, width, height, fps, format, audio_path)?;
+        let mut child = spawn_ffmpeg(output_path, width, height, fps, format, audio_path, false)?;
         let stdin = child
             .stdin
             .take()
@@ -190,6 +190,7 @@ fn spawn_ffmpeg(
     fps: u32,
     format: RecordFormat,
     audio_path: Option<&str>,
+    realtime: bool,
 ) -> Result<Child, String> {
     if let Some(parent) = Path::new(output_path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -200,7 +201,7 @@ fn spawn_ffmpeg(
     let size_arg = format!("{width}x{height}");
     let fps_arg = fps.max(1).to_string();
 
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = crate::ffmpeg::command();
     cmd.args([
         "-y",
         "-loglevel",
@@ -253,6 +254,12 @@ fn spawn_ffmpeg(
                 "-auto-alt-ref",
                 "0",
             ]);
+            if realtime {
+                // 実時間で書き出しが追いつかないと、録画の時間が抜け落ちる (1080p で 60fps でも 30fps でも落ちた)。
+                // 実時間向けの速い設定にする
+                let threads = std::thread::available_parallelism().map(|n| n.get().min(16)).unwrap_or(4).to_string();
+                cmd.args(["-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1", "-tile-columns", "2", "-lag-in-frames", "0", "-threads", &threads]);
+            }
             if has_audio {
                 cmd.args(["-c:a", "libopus", "-b:a", "160k", "-shortest"]);
             }
@@ -271,7 +278,7 @@ fn spawn_ffmpeg(
     }
 
     cmd.spawn()
-        .map_err(|e| format!("Failed to spawn ffmpeg (is ffmpeg in PATH?): {e}"))
+        .map_err(|e| crate::ffmpeg::spawn_error(&e))
 }
 
 /// 録画の後から重ねる音の区間。音声・動画ファイルの file_offset 秒から、録画の start〜end 秒に置く。
@@ -300,7 +307,7 @@ pub fn mux_audio_segments(video_path: &str, segments: &[AudioSegment], format: R
     let tmp = p.with_extension(format!("audio_tmp.{ext}"));
     let tmp_s = tmp.to_string_lossy().to_string();
 
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = crate::ffmpeg::command();
     cmd.args(["-y", "-loglevel", "error", "-i", video_path]);
     let mut filter = String::new();
     let mut labels = String::new();
@@ -364,6 +371,7 @@ pub fn mux_audio_segments(video_path: &str, segments: &[AudioSegment], format: R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn encodes_mp4_and_webm_alpha_via_ffmpeg() {

@@ -30,7 +30,7 @@ VRM のキャラクターをデスクトップに表示して、Web カメラだ
 | 使う機能 | 必要なもの |
 |---|---|
 | Web カメラのトラッキング | インターネット接続 (初回だけ。アプリのボタンから uv と Python の環境を自動で入れます。下の「トラッキングの準備」を参照) |
-| 動画の録画 | [FFmpeg](https://ffmpeg.org/download.html) (`ffmpeg.exe` に PATH が通っていること) |
+| 動画の録画 | [FFmpeg](https://ffmpeg.org/)。PATH が通っていればそれを使います。無いときは、設定画面の「出力」ページの「FFmpeg を入れる」で、アプリのフォルダの `toolsfmpeg` に入れられます (約 114 MB をダウンロード。PATH やレジストリは変えません) |
 | OBS への Spout2 出力 | [OBS Studio](https://obsproject.com/) と [obs-spout2-plugin](https://github.com/Off-World-Live/obs-spout2-plugin) |
 | 仮想カメラ (Discord / Zoom) | [OBS Studio](https://obsproject.com/) (仮想カメラのドライバを借ります) と管理者権限 |
 
@@ -53,8 +53,8 @@ VRM のキャラクターをデスクトップに表示して、Web カメラだ
 ### うつしみらーが作るもの
 | 場所 | 中身 | 消し方 |
 |---|---|---|
-| 展開したフォルダ (例: `C:\Tools\UtsushiMirror`) | アプリ本体。その中に作られるものもあります:<br>・`tracker\.venv` … トラッキング用の Python の環境 (約 400 MB)<br>・`tracker\models` … 初めてトラッキングしたときにダウンロードする顔・体の認識モデル<br>・`screenshots`、`recordings` … スクリーンショットと録画の既定の保存先 | フォルダごと消します。残したい画像や動画は先に移してください |
-| `%APPDATA%\UtsushiMirror` | 設定 (`vrmviewer_config.json`)、プリセット (`presets`)、トラッキングの設定と補正 (`tracker_settings.json`、`tracker_calibration.json`)、トラッキング用のシステムのインストールの記録 (`tracker_install.log`)、動作の記録 (`logs`)、描画のキャッシュ (`shader_cache`、`vulkan`) | フォルダごと消します。設定を残して入れ直すときは、消さずに残してください |
+| 展開したフォルダ (例: `C:\Tools\UtsushiMirror`) | アプリ本体。その中に作られるものもあります:<br>・`tracker\.venv` … トラッキング用の Python の環境 (約 400 MB)<br>・`tracker\models` … 初めてトラッキングしたときにダウンロードする顔・体の認識モデル<br>・`toolsfmpeg` … 設定画面から入れた FFmpeg (録画用)<br>・`screenshots`、`recordings` … スクリーンショットと録画の既定の保存先 | フォルダごと消します。残したい画像や動画は先に移してください |
+| `%APPDATA%\UtsushiMirror` | 設定 (`vrmviewer_config.json`)、プリセット (`presets`)、トラッキングの設定と補正 (`tracker_settings.json`、`tracker_calibration.json`)、トラッキング用のシステムと FFmpeg のインストールの記録 (`tracker_install.log`、`ffmpeg_install.log`)、動作の記録 (`logs`)、描画のキャッシュ (`shader_cache`、`vulkan`) | フォルダごと消します。設定を残して入れ直すときは、消さずに残してください |
 
 ### トラッキング用のシステムを入れたときに入るもの
 設定画面の「トラッキング」ページからインストールしたとき、うつしみらーのフォルダの外にも次のものが入ります。

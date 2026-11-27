@@ -55,9 +55,9 @@ try {
         Join-Path $RepoRoot $OutDir
     }
     if (Test-Path $absOutDir) {
-        # Keep user data written by the exported app (screenshots / recordings)
+        # Keep user data written by the exported app (screenshots / recordings / FFmpeg in tools)
         Get-ChildItem $absOutDir -Force |
-            Where-Object { $_.Name -notin @("screenshots", "recordings") } |
+            Where-Object { $_.Name -notin @("screenshots", "recordings", "tools") } |
             Remove-Item -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $absOutDir | Out-Null
@@ -97,6 +97,7 @@ try {
 
     $dstScriptsDir = Join-Path $absOutDir "scripts"
     New-Item -ItemType Directory -Force -Path $dstScriptsDir | Out-Null
+    Copy-Item (Join-Path $RepoRoot "scripts\install_ffmpeg.ps1") (Join-Path $dstScriptsDir "install_ffmpeg.ps1") -Force
     Copy-Item (Join-Path $RepoRoot "scripts\register_vcam.ps1") (Join-Path $dstScriptsDir "register_vcam.ps1") -Force
 
     # Webcam tracker (separate Python process). The venv only works on a PC that has the same base Python,

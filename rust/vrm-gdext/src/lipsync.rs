@@ -166,9 +166,9 @@ fn decode_symphonia(path: &str, keep_pcm: bool) -> Result<Decoded, String> {
 
 /// FFmpeg で 44.1 kHz の 16 bit ステレオにして取り出す (解析用のモノラルもここから作る)
 fn decode_ffmpeg(path: &str, keep_pcm: bool) -> Result<Decoded, String> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     let rate = 44100u32;
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = crate::ffmpeg::command();
     cmd.args(["-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "2", "-ar", &rate.to_string(), "-f", "s16le", "-"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -179,7 +179,7 @@ fn decode_ffmpeg(path: &str, keep_pcm: bool) -> Result<Decoded, String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let out = cmd.output().map_err(|e| format!("FFmpeg を起動できません: {e}"))?;
+    let out = cmd.output().map_err(|e| crate::ffmpeg::spawn_error(&e))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }

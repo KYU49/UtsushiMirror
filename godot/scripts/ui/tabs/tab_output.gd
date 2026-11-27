@@ -16,6 +16,10 @@ var _opt_fmt: OptionButton
 var _opt_fps: OptionButton
 var _chk_rec_audio: CheckBox
 var _btn_rec: Button
+var _ff_box: VBoxContainer
+var _ff_btn: Button
+var _ff_lbl: Label
+var _ff_dlg: ConfirmationDialog
 
 var _chk_spout: CheckBox
 var _edit_spout: LineEdit
@@ -103,6 +107,7 @@ func build(win, vb: VBoxContainer) -> void:
 
 	# ---- スクショ・録画
 	var c_cap: Dictionary = UiWidgets.card(vb, "スクリーンショット・録画")
+	_build_ffmpeg_box(c_cap["body"])
 	var b_shot := Button.new()
 	b_shot.text = "スクリーンショット撮影 (F11)"
 	b_shot.theme_type_variation = "AccentButton"
@@ -194,6 +199,84 @@ func build(win, vb: VBoxContainer) -> void:
 	c_ext["body"].add_child(_lbl_vcam)
 
 
+# ---- FFmpeg (録画に要る)。見つからないときだけ案内とボタンを出す
+func _build_ffmpeg_box(parent: Control) -> void:
+	_ff_dlg = ConfirmationDialog.new()
+	_ff_dlg.title = "FFmpeg を入れる"
+	_ff_dlg.ok_button_text = "ダウンロードして入れる"
+	_ff_dlg.dialog_autowrap = true
+	_ff_dlg.min_size = Vector2i(520, 0)
+	_ff_dlg.confirmed.connect(func():
+		if _win.controller == null:
+			return
+		var r: Dictionary = _win.controller.ffmpeg.start_install()
+		if not r.get("ok", false):
+			_win.show_snackbar("FFmpeg を入れられません: " + str(r.get("error", "")))
+		refresh_ffmpeg()
+	)
+	_win.add_child(_ff_dlg)
+
+	_ff_box = VBoxContainer.new()
+	_ff_box.add_theme_constant_override("separation", 8)
+	parent.add_child(_ff_box)
+	var note := Label.new()
+	note.theme_type_variation = "DimLabel"
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.text = "録画には FFmpeg が要りますが、見つかりません。ボタンを押すと、このアプリのフォルダに入れます (PATH などの設定は変えません)。"
+	_ff_box.add_child(note)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	_ff_box.add_child(row)
+	_ff_btn = Button.new()
+	_ff_btn.text = "FFmpeg を入れる"
+	_ff_btn.theme_type_variation = "AccentButton"
+	_ff_btn.pressed.connect(func():
+		if _win.controller == null:
+			return
+		var fm = _win.controller.ffmpeg
+		_ff_dlg.dialog_text = ("FFmpeg %s (gyan.dev の essentials 版、GPLv3) を GitHub からダウンロードして、次の場所に入れます。\n\n%s\n\n" +
+			"ダウンロード: 約 %d MB / 入れたあと: 約 %d MB\n消すときは、このフォルダを消すだけです。") % [
+			fm.VERSION, fm.app_dir().path_join("tools/ffmpeg").replace("/", "\\"), fm.DOWNLOAD_MB, fm.INSTALLED_MB]
+		_ff_dlg.popup_centered()
+	)
+	row.add_child(_ff_btn)
+	_ff_lbl = Label.new()
+	_ff_lbl.theme_type_variation = "MutedLabel"
+	_ff_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ff_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_ff_lbl)
+
+
+func refresh_ffmpeg() -> void:
+	if _ff_box == null or _win.controller == null:
+		return
+	var fm = _win.controller.ffmpeg
+	var installing: bool = fm.is_installing()
+	var available: bool = fm.is_available()
+	_ff_box.visible = installing or not available
+	_ff_btn.disabled = installing
+	_ff_btn.text = "入れています..." if installing else "FFmpeg を入れる"
+	_ff_lbl.text = fm.progress_text()
+	_ff_lbl.visible = _ff_lbl.text != ""
+	if _btn_rec != null:
+		_btn_rec.disabled = not available and not _win.controller.capture_manager.recording_active
+		_btn_rec.tooltip_text = "" if available else "FFmpeg を入れると録画できます"
+
+
+## 設定画面のタイマーから呼ばれる (インストール中の進み具合)
+func update_live() -> void:
+	if _win.controller != null and _win.controller.ffmpeg.is_installing():
+		refresh_ffmpeg()
+
+
+func on_ffmpeg_installed(ok: bool) -> void:
+	refresh_ffmpeg()
+	if ok:
+		_win.show_snackbar("FFmpeg を入れました。録画できます。")
+	else:
+		_win.show_snackbar("FFmpeg を入れられませんでした: " + str(_win.controller.ffmpeg.install_error), "", Callable(), 8.0)
+
+
 func sync(st: Dictionary) -> void:
 	var ov: Dictionary = st.get("output_viewport", {})
 	var ow := int(ov.get("width", 1280))
@@ -217,6 +300,9 @@ func sync(st: Dictionary) -> void:
 	_btn_rec.text = "■ 録画停止 (F12)" if rec_on else "● 録画開始 (F12)"
 	_chk_rec_audio.button_pressed = bool(cap.get("record_lipsync_audio", true))
 	_btn_rec.theme_type_variation = "DangerButton" if rec_on else ""
+	if _win.controller != null and not _win.controller.ffmpeg.is_installing():
+		_win.controller.ffmpeg.refresh()
+	refresh_ffmpeg()
 
 	if _win.controller != null:
 		var sc_dir: String = _win.controller.get_capture_dir("screenshots")

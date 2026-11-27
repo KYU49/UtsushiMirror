@@ -17,6 +17,7 @@ const LipSyncScript := preload("res://scripts/core/lip_sync.gd")
 const VrmExpressionsScript := preload("res://scripts/vrm/vrm_expressions.gd")
 const ProceduralIdleScript := preload("res://scripts/core/procedural_idle.gd")
 const TrackingManagerScript := preload("res://scripts/core/tracking_manager.gd")
+const FfmpegManagerScript := preload("res://scripts/core/ffmpeg_manager.gd")
 const PostEffectsScript := preload("res://scripts/core/post_effects.gd")
 const ConfigManagerScript := preload("res://scripts/core/config_manager.gd")
 const UiThemeScript := preload("res://scripts/ui/ui_theme.gd")
@@ -83,6 +84,7 @@ var _last_lookat_manual_target: Vector3 = Vector3(0.0, 1.4, 2.0)
 var _last_first_person: bool = false
 var _shutting_down: bool = false
 var tracking = TrackingManagerScript.new()
+var ffmpeg = FfmpegManagerScript.new()
 var _manual_expr_overrides: Dictionary = {} # ename -> true (UI/hotkey で固定中の表情)
 
 const VMC_AUTO_EMOTION_KEYS := {"happy": true, "angry": true, "surprised": true, "sad": true, "relaxed": true}
@@ -206,6 +208,7 @@ func _ready() -> void:
 	)
 	hotkey_manager.setup(bridge)
 	capture_manager.setup(bridge, output_viewport, bg_manager, camera_rig, lighting_rig)
+	ffmpeg.setup(bridge)
 	capture_manager.lip_sync = lip_sync
 
 	hotkey_manager.hotkey_triggered.connect(_on_hotkey_action)
@@ -354,6 +357,7 @@ func _process(delta: float) -> void:
 		_poll_vmc()
 		hotkey_manager.poll_global()
 	tracking.poll()
+	ffmpeg.poll()
 
 	if current_vrm != null:
 		current_vrm.lookat_world_target = camera_rig.get_camera_world_position()

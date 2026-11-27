@@ -8,6 +8,8 @@ recordings/
 !assets/samples/*.vrm
 dist/
 out/
+# FFmpeg installed by the app (settings > output)
+tools/
 godot/bin/
 
 # 開発用 (文章から .vrma を作る道具と、その手順書)
