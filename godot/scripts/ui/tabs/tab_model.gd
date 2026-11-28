@@ -6,6 +6,7 @@ const UiWidgets := preload("res://scripts/ui/ui_widgets.gd")
 
 var _win
 var _lbl_path: Label
+var _model_path := ""
 var _lbl_meta: Label
 var _chk_first_person: CheckBox
 var _recent_box: VBoxContainer
@@ -74,6 +75,7 @@ func build(win, vb: VBoxContainer) -> void:
 	_lbl_path.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_lbl_path.text = "未読み込み — メインウィンドウに .vrm ファイルをドラッグ＆ドロップできます"
 	c_mod["body"].add_child(_lbl_path)
+	UiWidgets.path_link(_lbl_path, func(): return _model_path)
 
 	_lbl_meta = Label.new()
 	_lbl_meta.theme_type_variation = "MutedLabel"
@@ -147,6 +149,8 @@ func sync(st: Dictionary) -> void:
 	var loaded := bool(st.get("model_loaded", false))
 	var mpath := str(st.get("model_path", ""))
 	var mname := str(st.get("model_name", ""))
+	_model_path = mpath if loaded else ""
+	UiWidgets.refresh_path_link(_lbl_path)
 	if loaded:
 		_lbl_path.text = (mname + "  —  " if mname != "" else "") + mpath
 		var meta_parts := PackedStringArray()

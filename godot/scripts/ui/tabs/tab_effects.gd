@@ -249,7 +249,8 @@ func build(win, vb: VBoxContainer) -> void:
 			return
 		var res: Dictionary = _win.controller.export_effects(p)
 		if res.get("ok", false):
-			_win.show_snackbar("シェーダー設定を書き出しました: " + str(res.get("path", p)).get_file())
+			var ep := str(res.get("path", p))
+			_win.show_snackbar("シェーダー設定を書き出しました: " + ep.get_file(), "フォルダを開く", func(): UiWidgets.open_in_folder(ep))
 		else:
 			_win.show_snackbar("書き出し失敗: " + str(res.get("error", "")))
 	, "effects.umshader")
@@ -261,7 +262,7 @@ func build(win, vb: VBoxContainer) -> void:
 		var res: Dictionary = _win.controller.import_effects(p)
 		if res.get("ok", false):
 			var part := " (シェーダーの部分だけ)" if p.to_lower().ends_with(".umset") else ""
-			_win.show_snackbar("シェーダー設定を読み込みました%s: %s" % [part, p.get_file()])
+			_win.show_snackbar("シェーダー設定を読み込みました%s: %s" % [part, p.get_file()], "フォルダを開く", func(): UiWidgets.open_in_folder(p))
 		else:
 			_win.show_snackbar("読み込み失敗: " + str(res.get("error", "")))
 	)

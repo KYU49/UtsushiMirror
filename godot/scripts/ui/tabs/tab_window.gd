@@ -7,6 +7,7 @@ var _opt_bg: OptionButton
 var _cp_bg: ColorPickerButton
 var _cp_grad: ColorPickerButton
 var _lbl_img: Label
+var _img_path := ""
 
 var _chk_trans: CheckBox
 var _chk_borderless: CheckBox
@@ -68,6 +69,7 @@ func build(win, vb: VBoxContainer) -> void:
 	_lbl_img.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_lbl_img.text = "(未設定)"
 	img_row.add_child(_lbl_img)
+	UiWidgets.path_link(_lbl_img, func(): return _img_path)
 
 	var b_img := Button.new()
 	b_img.text = "画像を選択..."
@@ -171,7 +173,8 @@ func sync(st: Dictionary) -> void:
 	_cp_grad.color = Color(str(bg.get("gradient_bottom", "#0f1218")))
 	var ip := str(bg.get("image_path", ""))
 	_lbl_img.text = ip.get_file() if ip != "" else "(未設定)"
-	_lbl_img.tooltip_text = ip
+	_img_path = ip
+	UiWidgets.refresh_path_link(_lbl_img)
 
 	var w: Dictionary = st.get("window", {})
 	_chk_trans.button_pressed = bool(w.get("transparent", false))

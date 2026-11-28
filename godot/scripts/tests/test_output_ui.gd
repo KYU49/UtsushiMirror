@@ -46,6 +46,13 @@ func _process(_d: float) -> bool:
 		if r.get("ok", false):
 			var s: Dictionary = _m.capture_manager.stop_recording()
 			DirAccess.remove_absolute(str(s.get("path", "")))
+		sw._sync_active_tab()
+		for l in [tab._lbl_sc_dir, tab._lbl_rc_dir, tab._lbl_out_img]:
+			_check("クリックでフォルダを開ける: " + l.text, l.has_meta("path_fn") and l.mouse_filter == Control.MOUSE_FILTER_STOP)
+		_check("保存先のパスが入っている", str(tab._lbl_sc_dir.get_meta("path_fn").call()) != "" and str(tab._lbl_rc_dir.get_meta("path_fn").call()) != "")
+		_check("保存先は色が変わる", tab._lbl_sc_dir.has_theme_color_override("font_color"))
+		_check("画像が未設定ならクリックできない色", not tab._lbl_out_img.has_theme_color_override("font_color"))
+		_check("モデルのパス欄もクリックできる", sw._tab_handlers["Model"]._lbl_path.has_meta("path_fn"))
 		# 絵を撮るため、録画の欄が見える所まで流す
 		var sc := _find_scroll(sw)
 		if sc != null:

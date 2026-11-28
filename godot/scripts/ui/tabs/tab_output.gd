@@ -11,7 +11,11 @@ var _cp_out: ColorPickerButton
 var _lbl_out_img: Label
 var _dlg_out_img: FileDialog
 
-var _lbl_dirs: Label
+var _lbl_sc_dir: Label
+var _lbl_rc_dir: Label
+var _sc_dir := ""
+var _rc_dir := ""
+var _out_img_path := ""
 var _opt_fmt: OptionButton
 var _opt_fps: OptionButton
 var _chk_rec_audio: CheckBox
@@ -101,6 +105,7 @@ func build(win, vb: VBoxContainer) -> void:
 	_lbl_out_img.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_lbl_out_img.text = "(未設定)"
 	oimg_row.add_child(_lbl_out_img)
+	UiWidgets.path_link(_lbl_out_img, func(): return _out_img_path)
 	var b_oimg := Button.new()
 	b_oimg.text = "選択..."
 	b_oimg.pressed.connect(func(): _win.popup_at_vrm_dir(_dlg_out_img))
@@ -140,9 +145,10 @@ func build(win, vb: VBoxContainer) -> void:
 	b_shot.pressed.connect(func():
 		if _win.controller == null:
 			return
-		var res: Dictionary = _win.controller.take_screenshot()
+		var res: Dictionary = await _win.controller.take_screenshot()
 		if res.get("ok", false):
-			_win.show_snackbar("スクリーンショット保存: " + str(res.get("path", "")).get_file())
+			var sp := str(res.get("path", ""))
+			_win.show_snackbar("スクリーンショット保存: " + sp.get_file(), "フォルダを開く", func(): UiWidgets.open_in_folder(sp))
 		else:
 			_win.show_snackbar("撮影失敗: " + str(res.get("error", "")))
 	)
@@ -159,12 +165,14 @@ func build(win, vb: VBoxContainer) -> void:
 		var cm = _win.controller.capture_manager
 		if cm.recording_active:
 			var r: Dictionary = cm.stop_recording()
+			var rp := str(r.get("path", ""))
+			var open_rec := func(): UiWidgets.open_in_folder(rp)
 			if r.get("ok", false) and str(r.get("audio_error", "")) != "":
-				_win.show_snackbar("録画を保存しましたが、リップシンクの音を入れられませんでした: " + str(r.get("audio_error", "")))
+				_win.show_snackbar("録画を保存しましたが、リップシンクの音を入れられませんでした: " + str(r.get("audio_error", "")), "フォルダを開く", open_rec, 8.0)
 			elif r.get("ok", false):
 				var wire := str(r.get("wire_path", ""))
 				_win.show_snackbar("録画を保存しました%s: %s%s" % [" (リップシンクの音入り)" if r.get("lipsync_audio", false) else "",
-					str(r.get("path", "")).get_file(), (" / ワイヤー表示: " + wire.get_file()) if wire != "" else ""])
+					str(r.get("path", "")).get_file(), (" / ワイヤー表示: " + wire.get_file()) if wire != "" else ""], "フォルダを開く", open_rec, 6.0)
 			else:
 				_win.show_snackbar("録画停止エラー: " + str(r.get("error", "")))
 		else:
@@ -181,10 +189,22 @@ func build(win, vb: VBoxContainer) -> void:
 	)
 	btn_row.add_child(_btn_rec)
 
-	_lbl_dirs = Label.new()
-	_lbl_dirs.theme_type_variation = "MutedLabel"
-	_lbl_dirs.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	c_cap["body"].add_child(_lbl_dirs)
+	# 保存先 (クリックでフォルダを開く)
+	var dirs_box := VBoxContainer.new()
+	dirs_box.add_theme_constant_override("separation", 2)
+	c_cap["body"].add_child(dirs_box)
+	var dirs_title := Label.new()
+	dirs_title.theme_type_variation = "MutedLabel"
+	dirs_title.text = "保存先 (クリックでフォルダを開く):"
+	dirs_box.add_child(dirs_title)
+	_lbl_sc_dir = Label.new()
+	_lbl_sc_dir.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	dirs_box.add_child(_lbl_sc_dir)
+	UiWidgets.path_link(_lbl_sc_dir, func(): return _sc_dir, true)
+	_lbl_rc_dir = Label.new()
+	_lbl_rc_dir.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	dirs_box.add_child(_lbl_rc_dir)
+	UiWidgets.path_link(_lbl_rc_dir, func(): return _rc_dir, true)
 
 	# ---- Spout2 / 仮想カメラ
 	var c_ext: Dictionary = UiWidgets.card(vb, "OBS 連携 (Spout2) / 仮想カメラ")
@@ -311,7 +331,8 @@ func sync(st: Dictionary) -> void:
 	_cp_out.color = Color(str(ov.get("color", "#00ff00")))
 	var oip := str(ov.get("image_path", ""))
 	_lbl_out_img.text = oip.get_file() if oip != "" else "(未設定)"
-	_lbl_out_img.tooltip_text = oip
+	_out_img_path = oip
+	UiWidgets.refresh_path_link(_lbl_out_img)
 
 	var cap: Dictionary = st.get("capture", {})
 	var rec_on := bool(cap.get("recording_active", false))
@@ -326,7 +347,12 @@ func sync(st: Dictionary) -> void:
 	if _win.controller != null:
 		var sc_dir: String = _win.controller.get_capture_dir("screenshots")
 		var rc_dir: String = _win.controller.get_capture_dir("recordings")
-		_lbl_dirs.text = "保存先:\n・スクショ: %s\n・録画: %s" % [sc_dir, rc_dir]
+		_sc_dir = sc_dir
+		_rc_dir = rc_dir
+		_lbl_sc_dir.text = "・スクショ: " + sc_dir.replace("/", "\\")
+		_lbl_rc_dir.text = "・録画: " + rc_dir.replace("/", "\\")
+		UiWidgets.refresh_path_link(_lbl_sc_dir)
+		UiWidgets.refresh_path_link(_lbl_rc_dir)
 
 	_chk_spout.button_pressed = bool(cap.get("spout_enabled", false))
 	if not _edit_spout.has_focus():

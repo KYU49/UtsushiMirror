@@ -62,6 +62,7 @@ var _built: bool = false
 
 var _root_bg: ColorRect
 var _hdr_model_lbl: Label
+var _hdr_model_path := ""
 var _hdr_api_lbl: Label
 
 var _nav_btns: Dictionary = {}      # tab_id -> Button
@@ -222,6 +223,7 @@ func _ensure_built() -> void:
 	_hdr_model_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_hdr_model_lbl.text = "モデル未読み込み — .vrm をメイン画面へドロップできます"
 	title_vb.add_child(_hdr_model_lbl)
+	UiWidgets.path_link(_hdr_model_lbl, func(): return _hdr_model_path)
 
 	_hdr_api_lbl = Label.new()
 	_hdr_api_lbl.theme_type_variation = "DimLabel"
@@ -433,7 +435,8 @@ func _ensure_built() -> void:
 			return
 		var r: Dictionary = controller.export_settings(p)
 		if r.get("ok", false):
-			show_snackbar("設定を書き出しました: " + str(r.get("path", p)).get_file())
+			var ep := str(r.get("path", p))
+			show_snackbar("設定を書き出しました: " + ep.get_file(), "フォルダを開く", func(): UiWidgets.open_in_folder(ep))
 			_refresh_recent_settings()
 		else:
 			show_snackbar("書き出し失敗: " + str(r.get("error", "")))
@@ -444,7 +447,7 @@ func _ensure_built() -> void:
 			return
 		var r: Dictionary = controller.import_settings(p)
 		if r.get("ok", false):
-			show_snackbar("設定を読み込みました: " + p.get_file())
+			show_snackbar("設定を読み込みました: " + p.get_file(), "フォルダを開く", func(): UiWidgets.open_in_folder(p))
 			_refresh_recent_settings()
 		else:
 			show_snackbar("読み込み失敗: " + str(r.get("error", "")))
@@ -557,6 +560,8 @@ func _on_tracking_installed(ok: bool) -> void:
 func _sync_header(st: Dictionary) -> void:
 	if _hdr_model_lbl == null:
 		return
+	_hdr_model_path = str(st.get("model_path", "")) if bool(st.get("model_loaded", false)) else ""
+	UiWidgets.refresh_path_link(_hdr_model_lbl)
 	if bool(st.get("model_loaded", false)):
 		var mname := str(st.get("model_name", ""))
 		var mpath := str(st.get("model_path", "")).get_file()
@@ -671,7 +676,7 @@ func _on_recent_settings_selected(idx: int) -> void:
 	if controller != null:
 		var r: Dictionary = controller.import_settings(meta)
 		if r.get("ok", false):
-			show_snackbar("設定を読み込みました: " + meta.get_file())
+			show_snackbar("設定を読み込みました: " + meta.get_file(), "フォルダを開く", func(): UiWidgets.open_in_folder(meta))
 		else:
 			show_snackbar("読み込み失敗: " + str(r.get("error", "")))
 		_refresh_recent_settings()

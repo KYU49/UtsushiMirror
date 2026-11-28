@@ -18,6 +18,7 @@ var chk_play: CheckBox
 var sl_volume: HSlider
 var sl_intensity: HSlider
 var file_lbl: Label
+var _file_path := ""
 var status_lbl: Label
 var text_edit: LineEdit
 var _dlg: FileDialog
@@ -77,6 +78,7 @@ func build(win, vb: VBoxContainer) -> void:
 	file_lbl.clip_text = true
 	file_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	audio_box.add_child(file_lbl)
+	UiWidgets.path_link(file_lbl, func(): return _file_path)
 	sl_intensity = UiWidgets.slider(audio_box, "口の開き", 0.2, 1.5, 0.05, LipSyncScript.DEFAULT_INTENSITY, func(v: float):
 		if _ctl() != null:
 			_ctl().lip_sync.intensity = v
@@ -135,11 +137,17 @@ func _ctl():
 func _start_audio(p: String) -> void:
 	if _ctl() == null:
 		return
-	file_lbl.text = p.get_file()
+	_set_file(p)
 	var r: Dictionary = _ctl().start_lipsync({"path": p})
 	if not r.get("ok", false):
 		_win.show_snackbar("リップシンクできません: " + str(r.get("error", "")))
 	update_live()
+
+
+func _set_file(p: String) -> void:
+	file_lbl.text = p.get_file()
+	_file_path = p
+	UiWidgets.refresh_path_link(file_lbl)
 
 
 func _start_text() -> void:
@@ -163,13 +171,13 @@ func update_live() -> void:
 	var st: Dictionary = _ctl().lipsync_state()
 	if bool(st.get("active", false)):
 		status_lbl.text = "● %s  残り %.1f 秒" % ["音を鳴らして合わせています" if bool(st.get("playing_audio", false)) else "音声に合わせています", float(st.get("remaining_sec", 0.0))]
-		file_lbl.text = str(st.get("path", "")).get_file()
+		_set_file(str(st.get("path", "")))
 	elif bool(st.get("talking", false)):
 		status_lbl.text = "● しゃべっています  残り %.1f 秒" % float(st.get("remaining_sec", 0.0))
 	else:
 		status_lbl.text = "停止中" if str(st.get("mode", "")) != "off" else "口はトラッキング・アニメーションのまま動きます"
 	if not bool(st.get("active", false)) and str(st.get("last_path", "")) != "":
-		file_lbl.text = str(st.get("last_path", "")).get_file()
+		_set_file(str(st.get("last_path", "")))
 	file_lbl.visible = file_lbl.text != ""
 
 

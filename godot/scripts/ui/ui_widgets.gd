@@ -223,6 +223,71 @@ static func color_row(
 	return btn
 
 
+## パスやファイル名を出す Label を、クリックでフォルダを開けるようにする。
+## path_fn はその時のパスを返す (空ならクリックできない)。ファイルなら入っているフォルダを開いて、そのファイルを選ぶ。
+## is_dir = true のフォルダがまだ無ければ作ってから開く。表示を変えたら refresh_path_link() を呼ぶ (色が変わる)
+const LINK_COLOR := Color("#8fb3ff")
+const LINK_HOVER := Color("#c3d6ff")
+
+
+static func path_link(lbl: Label, path_fn: Callable, is_dir: bool = false) -> void:
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	lbl.set_meta("path_fn", path_fn)
+	lbl.mouse_entered.connect(func():
+		var p := str(path_fn.call())
+		lbl.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if p != "" else Control.CURSOR_ARROW
+		lbl.tooltip_text = ("クリックでフォルダを開く\n" + p.replace("/", "\\")) if p != "" else ""
+		if p != "":
+			lbl.add_theme_color_override("font_color", LINK_HOVER)
+	)
+	lbl.mouse_exited.connect(func(): refresh_path_link(lbl))
+	lbl.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			var p := str(path_fn.call())
+			if p != "":
+				open_in_folder(p, is_dir)
+				lbl.accept_event()
+	)
+	refresh_path_link(lbl)
+
+
+static func refresh_path_link(lbl: Label) -> void:
+	if not lbl.has_meta("path_fn"):
+		return
+	if str((lbl.get_meta("path_fn") as Callable).call()) != "":
+		lbl.add_theme_color_override("font_color", LINK_COLOR)
+	else:
+		lbl.remove_theme_color_override("font_color")
+
+
+## フォルダならそのフォルダを、ファイルなら入っているフォルダ (そのファイルを選んだ状態) を開く
+static func open_in_folder(p: String, is_dir: bool = false) -> void:
+	p = p.strip_edges()
+	if p == "":
+		return
+	if p.begins_with("res://") or p.begins_with("user://"):
+		p = ProjectSettings.globalize_path(p)
+	if is_dir and not DirAccess.dir_exists_absolute(p):
+		DirAccess.make_dir_recursive_absolute(p)
+	if DirAccess.dir_exists_absolute(p):
+		OS.shell_open(p.replace("/", "\\") if OS.get_name() == "Windows" else p)
+	elif FileAccess.file_exists(p):
+		OS.shell_show_in_file_manager(p)
+	else:
+		# ファイルが消えていたら、残っている一番近いフォルダを開く
+		var d := p.get_base_dir()
+		for _i in 32:
+			if d == "" or DirAccess.dir_exists_absolute(d):
+				break
+			var up := d.get_base_dir()
+			if up == d:
+				d = ""
+				break
+			d = up
+		if d != "":
+			OS.shell_open(d.replace("/", "\\") if OS.get_name() == "Windows" else d)
+
+
 static func note(parent: VBoxContainer, text_str: String) -> Label:
 	var l := Label.new()
 	l.theme_type_variation = "MutedLabel"
