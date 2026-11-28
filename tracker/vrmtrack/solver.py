@@ -771,9 +771,8 @@ class Solver:
             b["happy"] = _clamp01(happy)
             b["surprised"] = _clamp01(surprised * cfg.surprised_gain)
             b["angry"] = _clamp01(angry * cfg.angry_gain)
-            # 笑顔の表情は多くのモデルで目を閉じる形を含む。まばたきと重なると目が崩れるので、その分まばたきを減らす
-            keep = 1.0 - _clamp01(b["happy"] * 1.2)
-            bl, br = bl * keep, br * keep
+            # 笑顔とまばたきが重なって目が崩れるのは、うつしみらー側 (vrm_expressions.gd) で
+            # 「感情の強さの分だけまばたきを弱める」ことで防ぐ。ここでも弱めると二重になり、笑顔で目を閉じても閉じきらない
         else:
             b["happy"] = b["surprised"] = b["angry"] = 0.0
         b["blinkLeft"], b["blinkRight"] = bl, br

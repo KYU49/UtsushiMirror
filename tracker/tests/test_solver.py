@@ -150,7 +150,7 @@ r = sv.solve(face={"matrix": m, "blendshapes": look})
 ok &= check("同期オフで左右の目が別々に動く", not np.allclose(r.bones["leftEye"], r.bones["rightEye"]))
 ok &= check("同期オフ: 外を見る左目の方が大きく動く", eye_dir(r, "left")[0] > eye_dir(r, "right")[0] > 0)
 
-# ---- 表情: 目を閉じただけで笑顔にならない・笑顔のときはまばたきを減らす・感度と強さ
+# ---- 表情: 目を閉じただけで笑顔にならない・笑顔で目を閉じてもまばたきを送る・感度と強さ
 from vrmtrack.mathq import q_axis_angle  # noqa: E402
 from vrmtrack.solver import SolveResult, _twist  # noqa: E402
 def blends(cfg_kw, bs):
@@ -160,7 +160,7 @@ b = blends({}, {"eyeBlinkLeft": 0.9, "eyeBlinkRight": 0.9, "mouthSmileLeft": 0.4
                 "eyeSquintLeft": 0.5, "eyeSquintRight": 0.5})
 ok &= check("目を閉じただけでは笑顔にならない", b["happy"] < 0.05 and b["blinkLeft"] > 0.8)
 b = blends({"happy_sens": 0.5, "happy_gain": 0.7}, {"mouthSmileLeft": 0.9, "mouthSmileRight": 0.9, "eyeBlinkLeft": 0.9, "eyeBlinkRight": 0.9})
-ok &= check("笑顔のときはまばたきを減らす (目が崩れない)", b["happy"] > 0.4 and b["blinkLeft"] < 0.5)
+ok &= check("笑顔で目を閉じると、笑顔もまばたきも送る (目の崩れはうつしみらー側で防ぐ)", b["happy"] > 0.4 and b["blinkLeft"] > 0.8)
 mid = {"mouthSmileLeft": 0.5, "mouthSmileRight": 0.5}
 ok &= check("笑顔の強さ 0 で笑顔が付かない", blends({"happy_gain": 0.0}, mid)["happy"] == 0.0)
 ok &= check("笑顔の感度を上げると付きやすい", blends({"happy_sens": 0.9}, mid)["happy"] > blends({"happy_sens": 0.1}, mid)["happy"])

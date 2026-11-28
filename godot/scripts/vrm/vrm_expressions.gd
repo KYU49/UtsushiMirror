@@ -18,6 +18,7 @@ const PRESET_NAMES: Array[String] = [
 const BLINK_SET := {"blink": true, "blinkLeft": true, "blinkRight": true}
 const LOOKAT_SET := {"lookUp": true, "lookDown": true, "lookLeft": true, "lookRight": true}
 const MOUTH_SET := {"aa": true, "ih": true, "ou": true, "ee": true, "oh": true}
+const EMOTION_SET := {"happy": true, "angry": true, "sad": true, "relaxed": true, "surprised": true}
 
 var expressions: Dictionary = {} # name -> ExpressionDef
 var target_weights: Dictionary = {} # name -> float
@@ -144,6 +145,11 @@ func _register_expr(ename: String, is_preset: bool, raw: Dictionary, node_to_mis
 	def.is_preset = is_preset
 	def.is_binary = bool(raw.get("isBinary", false))
 	def.override_blink = str(raw.get("overrideBlink", "none"))
+	# 感情の表情 (笑顔など) は多くのモデルで目の形そのものを変える (VRoid の Fcl_ALL_Joy は目を細めて閉じる)。
+	# そこへまばたきの「目を閉じる形」がそのまま足されると、まぶたが閉じた位置より下がって崩れる。
+	# VRoid などは overrideBlink を "none" で書き出すので、感情の表情では "blend" (感情の強さの分だけまばたきを弱める) として扱う
+	if is_preset and EMOTION_SET.has(ename) and def.override_blink == "none":
+		def.override_blink = "blend"
 	def.override_lookat = str(raw.get("overrideLookAt", "none"))
 	def.override_mouth = str(raw.get("overrideMouth", "none"))
 

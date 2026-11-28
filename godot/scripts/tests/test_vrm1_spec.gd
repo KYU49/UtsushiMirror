@@ -92,5 +92,29 @@ func _run_tests() -> void:
 		vrm.free()
 
 	root_node.free()
+	# 感情の表情が overrideBlink="none" (VRoid の書き出し) でも、その強さの分だけまばたきを弱める (まぶたが下がりすぎない)
+	var ex := VrmExpressions.new()
+	ex.setup({"extensions": {"VRMC_vrm": {"expressions": {"preset": {
+		"happy": {"overrideBlink": "none"}, "relaxed": {"overrideBlink": "block"}, "blink": {}, "aa": {}}}}}}, {}, [])
+	ex.set_weights({"happy": 0.5, "blink": 1.0}, 0.0, true)
+	var eff_h: float = float(ex.update(0.016)["effective"].get("blink", -1.0))
+	print("  happy=0.5(overrideBlink=none) + blink=1: blink effective=", eff_h)
+	if absf(eff_h - 0.5) > 0.001:
+		push_error("happy (overrideBlink=none) did not attenuate blink")
+		all_ok = false
+	ex.set_weights({"happy": 0.3}, 0.0, true)
+	var eff_a: float = float(ex.update(0.016, {}, 1.0)["effective"].get("blink", -1.0))
+	if absf(eff_a - 0.7) > 0.001:
+		push_error("auto blink was not attenuated by happy: %f" % eff_a)
+		all_ok = false
+	ex.set_weights({"relaxed": 0.4, "blink": 1.0}, 0.0, true)
+	if float(ex.update(0.016)["effective"].get("blink", -1.0)) != 0.0:
+		push_error("explicit overrideBlink=block was changed")
+		all_ok = false
+	ex.set_weights({"aa": 1.0, "blink": 1.0}, 0.0, true)
+	if float(ex.update(0.016)["effective"].get("blink", -1.0)) != 1.0:
+		push_error("non-emotion expression attenuated blink")
+		all_ok = false
+
 	print("TEST_VRM1_SPEC_RESULT=", "PASS" if all_ok else "FAIL")
 	quit(0 if all_ok else 1)
