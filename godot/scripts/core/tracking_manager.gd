@@ -510,6 +510,20 @@ func reset_settings() -> bool:
 	return apply_settings(d)
 
 
+## ワイヤー表示 (カメラの映像は入らない) を、録画に合わせて path へ fps の動画で書き出し始める。
+## トラッキングが動いていないときは何もしない (false を返す)
+func start_wire(path: String, fps: int) -> bool:
+	if not is_running():
+		return false
+	_send({"cmd": "wire_start", "path": path, "fps": fps})
+	return true
+
+
+func stop_wire() -> void:
+	if is_running():
+		_send({"cmd": "wire_stop"})
+
+
 func calibrate() -> Dictionary:
 	if not is_running():
 		return {"ok": false, "error": "トラッキングを開始してから実行してください"}

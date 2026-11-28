@@ -210,6 +210,7 @@ func _ready() -> void:
 	capture_manager.setup(bridge, output_viewport, bg_manager, camera_rig, lighting_rig)
 	ffmpeg.setup(bridge)
 	capture_manager.lip_sync = lip_sync
+	capture_manager.tracking = tracking
 
 	hotkey_manager.hotkey_triggered.connect(_on_hotkey_action)
 	camera_rig.camera_changed.connect(_emit_state_changed)

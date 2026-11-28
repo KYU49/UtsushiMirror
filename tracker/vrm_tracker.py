@@ -22,6 +22,10 @@ Webカメラから顔・手・全身を MediaPipe で推定し、VMC Protocol �
     {"cmd": "calibrate", "delay": 3}   → 3 秒後から約 1 秒間、正面・無表情・腕を下ろした姿勢を基準として記録
     {"cmd": "reset_calibration"}
     {"cmd": "status"}                   → 送り主へ JSON で返信
+    {"cmd": "wire_start", "path": "C:/.../rec_wire.mp4", "fps": 60}
+                                        → ワイヤー表示 (文字なし・黒地) を、その fps の動画に書き出し始める
+                                          (うつしみらーの録画に合わせる。カメラの映像は入らない)
+    {"cmd": "wire_stop"}                → 書き出しを終えて動画を閉じる
 """
 from __future__ import annotations
 
@@ -33,6 +37,7 @@ import platform
 import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -275,9 +280,10 @@ def save_json(path: str, d: dict) -> None:
 # ワイヤー描画 (カメラ画像は使わない。黒いキャンバスに点と線だけ)
 # ---------------------------------------------------------------------------
 class WireView:
-    def __init__(self, aspect: float, mirror: bool, width: int = 640) -> None:
+    def __init__(self, aspect: float, mirror: bool, width: int = 640, window: bool = True) -> None:
         self.w = width
-        self.h = int(width / aspect)
+        self.h = int(width / aspect) // 2 * 2
+        self.k = width / 640  # 線の太さの倍率
         self.mirror = mirror
         V = mp.tasks.vision
         self.pose_conn = [(c.start, c.end) for c in V.PoseLandmarksConnections.POSE_LANDMARKS]
@@ -286,6 +292,9 @@ class WireView:
         F = V.FaceLandmarksConnections
         self.face_conn = [(c.start, c.end) for c in F.FACE_LANDMARKS_CONTOURS]
         self.iris_conn = [(c.start, c.end) for c in (F.FACE_LANDMARKS_LEFT_IRIS + F.FACE_LANDMARKS_RIGHT_IRIS)]
+        if not window:
+            self._bg = np.zeros((self.h, self.w, 3), dtype=np.uint8)
+            return
         self._bg = np.full((self.h, self.w, 3), DARK, dtype=np.uint8)
         for x in range(0, self.w, 40):
             cv2.line(self._bg, (x, 0), (x, self.h), (30, 26, 23), 1)
@@ -301,9 +310,10 @@ class WireView:
     def _lines(self, img, lms, conn, color, th) -> None:
         for a, b in conn:
             if a < len(lms) and b < len(lms):
-                cv2.line(img, self._pt(lms[a]), self._pt(lms[b]), color, th, cv2.LINE_AA)
+                cv2.line(img, self._pt(lms[a]), self._pt(lms[b]), color, max(1, round(th * self.k)), cv2.LINE_AA)
 
-    def draw(self, pose, hands, face, fps: float, status: str, overlay: str = "") -> bool:
+    def paint(self, pose, hands, face):
+        """点と線だけの絵 (文字なし)"""
         img = self._bg.copy()
         if face is not None:
             self._lines(img, face, self.face_conn, GREY, 1)
@@ -312,11 +322,15 @@ class WireView:
             self._lines(img, pose, self.body_conn, RED, 3)
             for i, lm in enumerate(pose):
                 if i > 10 and (getattr(lm, "visibility", 1.0) or 0) > 0.5:
-                    cv2.circle(img, self._pt(lm), 4, WHITE, -1, cv2.LINE_AA)
+                    cv2.circle(img, self._pt(lm), round(4 * self.k), WHITE, -1, cv2.LINE_AA)
         for lms in hands:
             self._lines(img, lms, self.hand_conn, WHITE, 2)
             for lm in lms:
-                cv2.circle(img, self._pt(lm), 3, RED_HI, -1, cv2.LINE_AA)
+                cv2.circle(img, self._pt(lm), round(3 * self.k), RED_HI, -1, cv2.LINE_AA)
+        return img
+
+    def draw(self, pose, hands, face, fps: float, status: str, overlay: str = "") -> bool:
+        img = self.paint(pose, hands, face)
         if overlay:
             # キャリブレーション中: 顔を置く目安の枠と案内
             cx, cy = self.w // 2, int(self.h * 0.38)
@@ -341,6 +355,65 @@ class WireView:
         except cv2.error:
             return False
         return True
+
+
+class WireDump(WireView):
+    """ワイヤー表示 (文字なし・黒地・1280 幅) を動画に書き出す。カメラの映像は入らない。
+
+    fps を渡すと、書き始めてからの実際の時間に合わせてコマを足し引きし、その fps の動画にする
+    (うつしみらーの録画と同じ長さになる)。fps=None のときはカメラのコマのまま書き、各コマの時刻
+    (time.time()) を同じ名前の .txt に 1 行ずつ残す (環境変数 VRMTRACK_WIRE_OUT。宣伝動画などの素材用)。"""
+
+    def __init__(self, path: str, aspect: float, mirror: bool, fps: float | None = None) -> None:
+        super().__init__(aspect, mirror, width=1280, window=False)
+        self.path = os.path.abspath(path)
+        self.fps = fps
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        # OpenCV は Windows で英数字以外を含むパスに書けないので、そのときは英数字だけの場所に書いてから移す
+        self.work = self.path
+        if not self.path.isascii():
+            work_dir = next((d for d in (os.path.dirname(self.path), tempfile.gettempdir(), os.getcwd(),
+                                         os.path.dirname(os.path.abspath(__file__))) if d.isascii()), None)
+            if work_dir is None:
+                raise OSError("書き出し先に使える英数字だけのフォルダがありません")
+            self.work = os.path.join(work_dir, f"utsushi_wire_{os.getpid()}_{int(time.time() * 1000)}.mp4")
+        self.writer = cv2.VideoWriter(self.work, cv2.VideoWriter_fourcc(*"mp4v"), fps or 30, (self.w, self.h))
+        if not self.writer.isOpened():
+            raise OSError(f"動画を書き出せません: {self.work}")
+        self.times = open(os.path.splitext(self.path)[0] + ".txt", "w", encoding="utf-8") if fps is None else None
+        self.t0 = time.time()
+        self.n = 0
+        self.last = None
+        log(f"[tracker] wireframe dump → {self.path}")
+
+    def write(self, pose, hands, face) -> None:
+        img = self.paint(pose, hands, face)
+        if self.fps is None:
+            self.writer.write(img)
+            self.times.write(f"{time.time():.4f}\n")
+            self.times.flush()
+            return
+        self._fill(img)
+        self.last = img
+
+    def _fill(self, img) -> None:
+        due = int((time.time() - self.t0) * self.fps) + 1
+        while self.n < due:
+            self.writer.write(img)
+            self.n += 1
+
+    def close(self) -> None:
+        if self.fps is not None:
+            self._fill(self.last if self.last is not None else np.zeros((self.h, self.w, 3), np.uint8))
+        self.writer.release()
+        if self.times is not None:
+            self.times.close()
+        if self.work != self.path:
+            try:
+                shutil.move(self.work, self.path)
+            except OSError as e:
+                log(f"[tracker] ワイヤー表示の動画を移せません ({self.work} に残しました): {e}")
+        log(f"[tracker] wireframe saved: {self.path}")
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +499,10 @@ def main() -> int:
     sender = VmcSender(args.host, args.port)
     control = Control(args.control_port)
     view = None if args.no_preview else WireView(fw / fh, cfg.mirror)
+    dump = None  # 環境変数で常に書き出す分 (素材用)
+    if os.environ.get("VRMTRACK_WIRE_OUT"):
+        dump = WireDump(os.path.join(os.environ["VRMTRACK_WIRE_OUT"], time.strftime("wire_%Y%m%d_%H%M%S.mp4")), fw / fh, cfg.mirror)
+    rec_dump = None  # うつしみらーの録画に合わせて書き出す分 (wire_start / wire_stop)
     grab = Grabber(cap)
     grab.start()
 
@@ -452,6 +529,23 @@ def main() -> int:
                     cfg.update({k: v for k, v in (msg.get("params") or {}).items() if k not in LOCKED_KEYS})
                     if view is not None:
                         view.mirror = cfg.mirror
+                    for d in (dump, rec_dump):
+                        if d is not None:
+                            d.mirror = cfg.mirror
+                elif cmd == "wire_start":
+                    if rec_dump is not None:
+                        rec_dump.close()
+                        rec_dump = None
+                    try:
+                        rec_dump = WireDump(str(msg.get("path", "")), fw / fh, cfg.mirror, float(msg.get("fps", 30) or 30))
+                        last_msg = ""
+                    except (OSError, ValueError, TypeError) as e:
+                        log(f"[tracker] ワイヤー表示を書き出せません: {e}")
+                        last_msg = "wire error"
+                elif cmd == "wire_stop":
+                    if rec_dump is not None:
+                        rec_dump.close()
+                        rec_dump = None
                 elif cmd == "calibrate":
                     try:
                         delay = max(0.0, float(msg.get("delay", 3.0)))
@@ -562,6 +656,9 @@ def main() -> int:
             status = " ".join(s for s, on in (("FACE", face_in), ("POSE", pose_w), ("HANDS", hands_in)) if on)
             if solver.calib.done:
                 status += "  [calibrated]"
+            for d in (dump, rec_dump):
+                if d is not None:
+                    d.write(pose_i, hands_draw, face_pts)
             if view is not None and not view.draw(pose_i, hands_draw, face_pts, fps, status or "searching...", overlay):
                 break
             if frames % 90 == 0:
@@ -573,6 +670,9 @@ def main() -> int:
     finally:
         grab.stop()
         grab.join(timeout=1.0)
+        for d in (dump, rec_dump):
+            if d is not None:
+                d.close()
         if executor is not None:
             executor.shutdown(wait=True)
         for lm in (face_lm, hand_lm, pose_lm):

@@ -15,6 +15,7 @@ var _lbl_dirs: Label
 var _opt_fmt: OptionButton
 var _opt_fps: OptionButton
 var _chk_rec_audio: CheckBox
+var _chk_rec_wire: CheckBox
 var _btn_rec: Button
 var _ff_box: VBoxContainer
 var _ff_btn: Button
@@ -108,21 +109,6 @@ func build(win, vb: VBoxContainer) -> void:
 	# ---- スクショ・録画
 	var c_cap: Dictionary = UiWidgets.card(vb, "スクリーンショット・録画")
 	_build_ffmpeg_box(c_cap["body"])
-	var b_shot := Button.new()
-	b_shot.text = "スクリーンショット撮影 (F11)"
-	b_shot.theme_type_variation = "AccentButton"
-	b_shot.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	b_shot.pressed.connect(func():
-		if _win.controller == null:
-			return
-		var res: Dictionary = _win.controller.take_screenshot()
-		if res.get("ok", false):
-			_win.show_snackbar("スクリーンショット保存: " + str(res.get("path", "")).get_file())
-		else:
-			_win.show_snackbar("撮影失敗: " + str(res.get("error", "")))
-	)
-	c_cap["body"].add_child(b_shot)
-
 	_opt_fmt = UiWidgets.option_row(c_cap["body"], "録画形式", [
 		["mp4", "MP4 (H.264 / 標準)"],
 		["webm_alpha", "WebM (VP9 / 透過α対応)"],
@@ -136,10 +122,37 @@ func build(win, vb: VBoxContainer) -> void:
 			_win.controller.capture_manager.record_lipsync_audio = on
 	, is_sync)
 	_chk_rec_audio.tooltip_text = "録画中に「音声から」のリップシンクで流したファイルの音を、録画を止めたあとに重ねます (「音も鳴らす」がオフでも入ります)"
+	_chk_rec_wire = UiWidgets.check(c_cap["body"], "トラッキングのワイヤー表示も別の動画に書き出す", false, func(on: bool):
+		if _win.controller != null:
+			_win.controller.capture_manager.record_wire = on
+	, is_sync)
+	_chk_rec_wire.tooltip_text = "トラッキング中に録画すると、ワイヤー表示 (黒地に線だけ。カメラの映像は入りません) を\n録画と同じ長さで「<録画の名前>_wire.mp4」に書き出します。動画の編集で並べる素材などに"
+
+	# 撮影と録画のボタンは横に並べ、同じ大きさ・見た目にする (録画中だけ赤くして分かるように)
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	c_cap["body"].add_child(btn_row)
+	var b_shot := Button.new()
+	b_shot.text = "スクリーンショット撮影 (F11)"
+	b_shot.theme_type_variation = "AccentButton"
+	b_shot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_shot.custom_minimum_size.y = 40
+	b_shot.pressed.connect(func():
+		if _win.controller == null:
+			return
+		var res: Dictionary = _win.controller.take_screenshot()
+		if res.get("ok", false):
+			_win.show_snackbar("スクリーンショット保存: " + str(res.get("path", "")).get_file())
+		else:
+			_win.show_snackbar("撮影失敗: " + str(res.get("error", "")))
+	)
+	btn_row.add_child(b_shot)
 
 	_btn_rec = Button.new()
 	_btn_rec.text = "● 録画開始 (F12)"
-	_btn_rec.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_btn_rec.theme_type_variation = "AccentButton"
+	_btn_rec.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_btn_rec.custom_minimum_size.y = 40
 	_btn_rec.pressed.connect(func():
 		if _win.controller == null:
 			return
@@ -149,7 +162,9 @@ func build(win, vb: VBoxContainer) -> void:
 			if r.get("ok", false) and str(r.get("audio_error", "")) != "":
 				_win.show_snackbar("録画を保存しましたが、リップシンクの音を入れられませんでした: " + str(r.get("audio_error", "")))
 			elif r.get("ok", false):
-				_win.show_snackbar("録画を保存しました%s: %s" % [" (リップシンクの音入り)" if r.get("lipsync_audio", false) else "", str(r.get("path", "")).get_file()])
+				var wire := str(r.get("wire_path", ""))
+				_win.show_snackbar("録画を保存しました%s: %s%s" % [" (リップシンクの音入り)" if r.get("lipsync_audio", false) else "",
+					str(r.get("path", "")).get_file(), (" / ワイヤー表示: " + wire.get_file()) if wire != "" else ""])
 			else:
 				_win.show_snackbar("録画停止エラー: " + str(r.get("error", "")))
 		else:
@@ -157,11 +172,14 @@ func build(win, vb: VBoxContainer) -> void:
 			var fps := int(str(_opt_fps.get_item_metadata(_opt_fps.selected)))
 			var r: Dictionary = cm.start_recording({"format": fmt, "fps": fps})
 			if r.get("ok", false):
-				_win.show_snackbar("録画を開始しました。")
+				if _chk_rec_wire.button_pressed and str(r.get("wire_path", "")) == "":
+					_win.show_snackbar("録画を開始しました (トラッキングが止まっているので、ワイヤー表示は書き出しません)。")
+				else:
+					_win.show_snackbar("録画を開始しました。")
 			else:
 				_win.show_snackbar("録画開始エラー: " + str(r.get("error", "")))
 	)
-	c_cap["body"].add_child(_btn_rec)
+	btn_row.add_child(_btn_rec)
 
 	_lbl_dirs = Label.new()
 	_lbl_dirs.theme_type_variation = "MutedLabel"
@@ -299,7 +317,8 @@ func sync(st: Dictionary) -> void:
 	var rec_on := bool(cap.get("recording_active", false))
 	_btn_rec.text = "■ 録画停止 (F12)" if rec_on else "● 録画開始 (F12)"
 	_chk_rec_audio.button_pressed = bool(cap.get("record_lipsync_audio", true))
-	_btn_rec.theme_type_variation = "DangerButton" if rec_on else ""
+	_chk_rec_wire.button_pressed = bool(cap.get("record_wire", false))
+	_btn_rec.theme_type_variation = "DangerButton" if rec_on else "AccentButton"
 	if _win.controller != null and not _win.controller.ffmpeg.is_installing():
 		_win.controller.ffmpeg.refresh()
 	refresh_ffmpeg()

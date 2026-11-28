@@ -28,6 +28,10 @@ var recordings_dir: String = "recordings"
 var record_lipsync_audio: bool = true
 ## リップシンク (lip_sync.gd)。app_controller が渡す
 var lip_sync = null
+## 録画と一緒に、トラッキングのワイヤー表示も別の動画 (<録画の名前>_wire.mp4) に書き出す
+var record_wire: bool = false
+## トラッキング (tracking_manager.gd)。app_controller が渡す
+var tracking = null
 
 var _record_elapsed: float = 0.0
 var _frames_pushed: int = 0
@@ -35,6 +39,7 @@ var _audio_segs: Array = []  # {path, offset, start, end} (秒。start / end は
 var _seg_open := {}
 var _seg_session := -1
 var _rec_lipsync_audio := true
+var _wire_path := ""
 var _sequencer_busy: bool = false
 var _screenshot_busy: bool = false
 
@@ -205,6 +210,12 @@ func start_recording(params: Dictionary) -> Dictionary:
 		_audio_segs.clear()
 		_seg_open = {}
 		_rec_lipsync_audio = bool(params.get("lipsync_audio", record_lipsync_audio))
+		_wire_path = ""
+		if bool(params.get("wire", record_wire)) and tracking != null:
+			var wp := abs_out.get_basename() + "_wire.mp4"
+			if tracking.start_wire(wp, recording_fps):
+				_wire_path = wp
+		res["wire_path"] = _wire_path
 		_refresh_viewport_update_mode()
 		capture_state_changed.emit()
 	return res
@@ -215,7 +226,11 @@ func stop_recording() -> Dictionary:
 		return {"ok": false, "error": "Not currently recording"}
 	_close_seg()
 	recording_active = false
+	if _wire_path != "" and tracking != null:
+		tracking.stop_wire()
 	var res: Dictionary = bridge.stop_recording()
+	res["wire_path"] = _wire_path
+	_wire_path = ""
 	if res.get("ok", false):
 		res["path"] = str(res.get("output_path", recording_path))
 		if not _audio_segs.is_empty():
@@ -434,6 +449,7 @@ func to_dict() -> Dictionary:
 		"screenshots_dir": screenshots_dir,
 		"recordings_dir": recordings_dir,
 		"record_lipsync_audio": record_lipsync_audio,
+		"record_wire": record_wire,
 	}
 
 
